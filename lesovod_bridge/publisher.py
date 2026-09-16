@@ -43,12 +43,20 @@ class PublishError(Exception):
     pass
 
 
+# Cloudflare перед сервером «Лесовод» банит запросы с дефолтным
+# User-Agent Python (Python-urllib/х.у) как подозрительные — ошибка
+# 403 "error code: 1010" (WAF-блок по сигнатуре клиента), а не
+# проблема авторизации или самой ручки. Обычный User-Agent браузера
+# такую блокировку снимает.
+_USER_AGENT = "LesovodBridge-QGIS-Plugin/1.0"
+
+
 def _auth_headers(token):
     if not token:
         raise PublishError(
             "Не задан токен сервера «Лесовод» (настройки плагина -> «Токен»)."
         )
-    return {"Authorization": f"Bearer {token}"}
+    return {"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT}
 
 
 def _request(method, url, headers, data=None):
@@ -57,9 +65,17 @@ def _request(method, url, headers, data=None):
         with urlrequest.urlopen(req, timeout=30) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urlerror.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        hint = ""
+        if exc.code == 403 and "1010" in body:
+            hint = (
+                " Это похоже на блокировку Cloudflare WAF по сигнатуре клиента "
+                "(error code: 1010), а не на проблему с токеном или самой ручкой — "
+                "нужно на стороне сервера разрешить в Cloudflare запросы к "
+                "/api/map/import-layer* с этим User-Agent или с этим Bearer-токеном."
+            )
         raise PublishError(
-            f"Сервер «Лесовод» ответил ошибкой {exc.code} на {method} {url}: "
-            f"{exc.read().decode('utf-8', errors='replace')}"
+            f"Сервер «Лесовод» ответил ошибкой {exc.code} на {method} {url}: {body}{hint}"
         ) from exc
     except urlerror.URLError as exc:
         raise PublishError(f"Не удалось соединиться с сервером «Лесовод»: {exc.reason}") from exc
