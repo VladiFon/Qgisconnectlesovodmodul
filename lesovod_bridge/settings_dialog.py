@@ -48,11 +48,12 @@ class LesovodBridgeSettingsDialog(QDialog):
         self.lesovod_base_url = QLineEdit(values["lesovod_base_url"])
         self.lesovod_token = QLineEdit(values["lesovod_token"])
         self.lesovod_token.setEchoMode(QLineEdit.Password)
+        self.lesovod_token.setPlaceholderText("только сам токен, без слова Bearer")
         self.lesnichestvo_num = QLineEdit(values["lesnichestvo_num"])
         self.lesnichestvo_num.setPlaceholderText("необязательно — фильтр/метка лесничества")
 
         server_form.addRow("Адрес сервера:", self.lesovod_base_url)
-        server_form.addRow("Токен (Bearer):", self.lesovod_token)
+        server_form.addRow("Токен (без слова «Bearer»):", self.lesovod_token)
         server_form.addRow("Номер лесничества:", self.lesnichestvo_num)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

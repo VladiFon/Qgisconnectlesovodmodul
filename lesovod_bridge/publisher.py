@@ -56,7 +56,15 @@ def _auth_headers(token):
         raise PublishError(
             "Не задан токен сервера «Лесовод» (настройки плагина -> «Токен»)."
         )
-    return {"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT}
+    # Поле в настройках подписано "Токен (Bearer)" — если туда вписали
+    # "Bearer <токен>" целиком (а не только сам токен), получилось бы
+    # "Authorization: Bearer Bearer <токен>", и сервер отвечает 401
+    # "Требуется авторизация" так, будто заголовка не было вовсе. Срезаем
+    # случайный префикс, чтобы плагин работал в обоих случаях.
+    clean_token = token
+    if clean_token.lower().startswith("bearer "):
+        clean_token = clean_token[len("bearer "):].strip()
+    return {"Authorization": f"Bearer {clean_token}", "User-Agent": _USER_AGENT}
 
 
 def _request(method, url, headers, data=None):
