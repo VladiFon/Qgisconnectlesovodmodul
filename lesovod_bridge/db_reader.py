@@ -53,23 +53,16 @@ def _connect_readonly(db_host, db_port, db_name, db_user, db_password):
     return conn
 
 
-def _geom_text_to_geojson(geom_text):
-    """Поле geom в area — текстовое. Формат заранее не документирован
-    (WKT или уже GeoJSON) — пробуем оба варианта, ничего не придумываем
-    сверх этого."""
-    text = (geom_text or "").strip()
+def _geom_geojson_text_to_dict(geom_geojson_text):
+    """geom в area — двоичная геометрия (EWKB), не текст: читать её
+    напрямую нельзя, драйвер отдаёт двоичные байты, а не WKT/GeoJSON
+    (отсюда были ошибки "не удалось разобрать geom как WKT"). Запрос
+    сам просит у PostGIS готовый GeoJSON через ST_AsGeoJSON(geom), сюда
+    приходит уже текст вида {"type":"Polygon","coordinates":[...]}."""
+    text = (geom_geojson_text or "").strip()
     if not text:
-        raise GisleshozReadError("пустое поле geom")
-
-    if text.startswith("{"):
-        return json.loads(text)
-
-    from osgeo import ogr
-
-    geom = ogr.CreateGeometryFromWkt(text)
-    if geom is None:
-        raise GisleshozReadError(f"не удалось разобрать geom как WKT: {text[:80]!r}")
-    return json.loads(geom.ExportToJson())
+        raise GisleshozReadError("пустая геометрия (ST_AsGeoJSON вернул NULL)")
+    return json.loads(text)
 
 
 def fetch_lesoseki(db_host, db_port, db_name, db_user, db_password, schema="public"):
@@ -82,7 +75,10 @@ def fetch_lesoseki(db_host, db_port, db_name, db_user, db_password, schema="publ
     """
     conn = _connect_readonly(db_host, db_port, db_name, db_user, db_password)
     try:
-        columns_sql = ", ".join(f'"{c}"' for c in _COLUMNS)
+        attribute_columns = [c for c in _COLUMNS if c != "geom"]
+        columns_sql = ", ".join(
+            ['ST_AsGeoJSON("geom") AS geom'] + [f'"{c}"' for c in attribute_columns]
+        )
         query = f'SELECT {columns_sql} FROM "{schema}"."area"'
         with conn.cursor() as cur:
             cur.execute(query)
@@ -98,8 +94,8 @@ def fetch_lesoseki(db_host, db_port, db_name, db_user, db_password, schema="publ
         geom_text = record.pop("geom")
         uid = record.get("uid")
         try:
-            geometry = _geom_text_to_geojson(geom_text)
-        except (GisleshozReadError, ValueError, json.JSONDecodeError) as exc:
+            geometry = _geom_geojson_text_to_dict(geom_text)
+        except (GisleshozReadError, json.JSONDecodeError) as exc:
             errors.append(f"лесосека uid={uid}: {exc}")
             continue
 
