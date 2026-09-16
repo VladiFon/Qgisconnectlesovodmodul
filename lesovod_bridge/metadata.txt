@@ -1,0 +1,20 @@
+[general]
+name=Лесовод-мост
+qgisMinimumVersion=3.0
+description=Публикация контуров лесосек из базы ГИСлесхоз (RUP «Белгослес») в систему «Лесовод». Только чтение базы ГИСлесхоз, ничего в ней не меняет.
+about=Отдельный вспомогательный плагин рядом с официальным плагином ГИСлесхоз. Не редактирует и не встраивается в его код. Читает таблицу area в базе ГИСлесхоз (PostgreSQL/PostGIS) в режиме только для чтения и отправляет контуры лесосек в «Лесовод» одной пачкой (layer_name = "qgis_lesoseki"), полностью заменяя предыдущее содержимое этой пачки при каждой публикации.
+version=0.1.0
+author=Лесовод
+email=vladifon16022002@gmail.com
+
+tracker=
+repository=
+homepage=
+
+tags=forestry,lesovod,gisleshoz,postgis
+
+category=Plugins
+icon=icon.svg
+experimental=True
+deprecated=False
+server=False
