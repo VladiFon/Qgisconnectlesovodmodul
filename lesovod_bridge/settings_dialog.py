@@ -46,16 +46,14 @@ class LesovodBridgeSettingsDialog(QDialog):
         server_form = QFormLayout(server_box)
 
         self.lesovod_base_url = QLineEdit(values["lesovod_base_url"])
-        self.lesovod_import_path = QLineEdit(values["lesovod_import_path"])
-        self.lesovod_import_path.setPlaceholderText(
-            "напр. /api/map/layers/import — уточните точный путь в /docs"
-        )
         self.lesovod_token = QLineEdit(values["lesovod_token"])
         self.lesovod_token.setEchoMode(QLineEdit.Password)
+        self.lesnichestvo_num = QLineEdit(values["lesnichestvo_num"])
+        self.lesnichestvo_num.setPlaceholderText("необязательно — фильтр/метка лесничества")
 
         server_form.addRow("Адрес сервера:", self.lesovod_base_url)
-        server_form.addRow("Путь ручки приёма слоёв:", self.lesovod_import_path)
         server_form.addRow("Токен (Bearer):", self.lesovod_token)
+        server_form.addRow("Номер лесничества:", self.lesnichestvo_num)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -74,6 +72,6 @@ class LesovodBridgeSettingsDialog(QDialog):
             "db_user": self.db_user.text().strip(),
             "db_password": self.db_password.text(),
             "lesovod_base_url": self.lesovod_base_url.text().strip().rstrip("/"),
-            "lesovod_import_path": self.lesovod_import_path.text().strip(),
             "lesovod_token": self.lesovod_token.text().strip(),
+            "lesnichestvo_num": self.lesnichestvo_num.text().strip(),
         })

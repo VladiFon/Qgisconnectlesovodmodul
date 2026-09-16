@@ -91,17 +91,19 @@ class LesovodBridgePlugin:
             return
 
         try:
-            status, response_text = publisher.publish(
+            status, response_text, deleted_batches = publisher.publish(
                 base_url=values["lesovod_base_url"],
-                import_path=values["lesovod_import_path"],
                 token=values["lesovod_token"],
                 features=features,
+                lesnichestvo_num=values["lesnichestvo_num"] or None,
             )
         except publisher.PublishError as exc:
             QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", str(exc))
             return
 
         message = f"Опубликовано лесосек: {len(features)} (HTTP {status})."
+        if deleted_batches:
+            message += f"\nСтарых пачек этого слоя удалено: {len(deleted_batches)}."
         if read_errors:
             message += "\n\nПропущено строк с нераспознанной геометрией:\n" + "\n".join(read_errors)
         QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", message)

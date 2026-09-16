@@ -21,8 +21,8 @@ DEFAULTS = {
     "db_user": "",
     "db_password": "",
     "lesovod_base_url": "https://lesovodapipom.store",
-    "lesovod_import_path": "",
     "lesovod_token": "",
+    "lesnichestvo_num": "",
 }
 
 
