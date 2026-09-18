@@ -1,10 +1,18 @@
+import json
 import os
+import tempfile
 
+from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
 
-from . import db_reader, publisher, settings
+from . import db_reader, geo_notes, publisher, settings
 from .settings_dialog import LesovodBridgeSettingsDialog
+
+_GEO_NOTES_LAYER_NAME = "Лесовод — метки рабочих"
+# Фиксированное имя файла в системном temp — каждое обновление
+# перезаписывает его же, а не плодит новые файлы на диске.
+_GEO_NOTES_FILE = os.path.join(tempfile.gettempdir(), "lesovod_geo_notes.geojson")
 
 
 class LesovodBridgePlugin:
@@ -15,7 +23,9 @@ class LesovodBridgePlugin:
     def __init__(self, iface):
         self.iface = iface
         self.publish_action = None
+        self.refresh_geo_notes_action = None
         self.settings_action = None
+        self.geo_notes_layer = None
 
     def initGui(self):
         icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
@@ -26,6 +36,11 @@ class LesovodBridgePlugin:
         self.iface.addToolBarIcon(self.publish_action)
         self.iface.addPluginToMenu("Лесовод-мост", self.publish_action)
 
+        self.refresh_geo_notes_action = QAction(icon, "Обновить метки", self.iface.mainWindow())
+        self.refresh_geo_notes_action.triggered.connect(self.run_refresh_geo_notes)
+        self.iface.addToolBarIcon(self.refresh_geo_notes_action)
+        self.iface.addPluginToMenu("Лесовод-мост", self.refresh_geo_notes_action)
+
         self.settings_action = QAction("Настройки Лесовод-моста…", self.iface.mainWindow())
         self.settings_action.triggered.connect(self.run_settings)
         self.iface.addPluginToMenu("Лесовод-мост", self.settings_action)
@@ -34,6 +49,9 @@ class LesovodBridgePlugin:
         if self.publish_action:
             self.iface.removeToolBarIcon(self.publish_action)
             self.iface.removePluginMenu("Лесовод-мост", self.publish_action)
+        if self.refresh_geo_notes_action:
+            self.iface.removeToolBarIcon(self.refresh_geo_notes_action)
+            self.iface.removePluginMenu("Лесовод-мост", self.refresh_geo_notes_action)
         if self.settings_action:
             self.iface.removePluginMenu("Лесовод-мост", self.settings_action)
 
@@ -107,3 +125,48 @@ class LesovodBridgePlugin:
         if read_errors:
             message += "\n\nПропущено строк с нераспознанной геометрией:\n" + "\n".join(read_errors)
         QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", message)
+
+    def run_refresh_geo_notes(self):
+        """Лесовод -> QGIS: скачивает метки рабочих и кладёт их точечным
+        слоем на карту, заменяя предыдущую версию этого же слоя, а не
+        накапливая копии при повторных нажатиях."""
+        values = settings.load()
+
+        try:
+            geojson_data = geo_notes.fetch_geo_notes_geojson(
+                base_url=values["lesovod_base_url"],
+                token=values["lesovod_token"],
+            )
+        except geo_notes.GeoNotesFetchError as exc:
+            QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+
+        project = QgsProject.instance()
+        if self.geo_notes_layer is not None and project.mapLayer(self.geo_notes_layer.id()):
+            project.removeMapLayer(self.geo_notes_layer.id())
+        self.geo_notes_layer = None
+
+        # Пишем во временный файл без токена — сам токен использован
+        # только в разовом HTTP-запросе выше и в источник слоя (а значит,
+        # и в сохранённый проект QGIS) не попадает.
+        with open(_GEO_NOTES_FILE, "w", encoding="utf-8") as f:
+            json.dump(geojson_data, f, ensure_ascii=False)
+
+        layer = QgsVectorLayer(_GEO_NOTES_FILE, _GEO_NOTES_LAYER_NAME, "ogr")
+        if not layer.isValid():
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Лесовод-мост",
+                "Сервер ответил, но QGIS не смог загрузить ответ как векторный "
+                "слой (похоже, это не корректный GeoJSON).",
+            )
+            return
+
+        project.addMapLayer(layer)
+        self.geo_notes_layer = layer
+
+        QMessageBox.information(
+            self.iface.mainWindow(),
+            "Лесовод-мост",
+            f"Метки обновлены: {layer.featureCount()} шт.",
+        )
