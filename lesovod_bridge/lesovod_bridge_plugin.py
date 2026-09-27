@@ -1,10 +1,15 @@
 import os
+from urllib import parse as urlparse
 
+from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
 
 from . import db_reader, publisher, settings
 from .settings_dialog import LesovodBridgeSettingsDialog
+
+GEO_NOTES_PATH = "/api/map/geo-notes.geojson"
+GEO_NOTES_LAYER_NAME = "Лесовод: метки рабочих"
 
 
 class LesovodBridgePlugin:
@@ -15,6 +20,7 @@ class LesovodBridgePlugin:
     def __init__(self, iface):
         self.iface = iface
         self.publish_action = None
+        self.geo_notes_action = None
         self.settings_action = None
 
     def initGui(self):
@@ -26,6 +32,11 @@ class LesovodBridgePlugin:
         self.iface.addToolBarIcon(self.publish_action)
         self.iface.addPluginToMenu("Лесовод-мост", self.publish_action)
 
+        self.geo_notes_action = QAction(icon, "Показать метки рабочих", self.iface.mainWindow())
+        self.geo_notes_action.triggered.connect(self.run_show_geo_notes)
+        self.iface.addToolBarIcon(self.geo_notes_action)
+        self.iface.addPluginToMenu("Лесовод-мост", self.geo_notes_action)
+
         self.settings_action = QAction("Настройки Лесовод-моста…", self.iface.mainWindow())
         self.settings_action.triggered.connect(self.run_settings)
         self.iface.addPluginToMenu("Лесовод-мост", self.settings_action)
@@ -34,6 +45,9 @@ class LesovodBridgePlugin:
         if self.publish_action:
             self.iface.removeToolBarIcon(self.publish_action)
             self.iface.removePluginMenu("Лесовод-мост", self.publish_action)
+        if self.geo_notes_action:
+            self.iface.removeToolBarIcon(self.geo_notes_action)
+            self.iface.removePluginMenu("Лесовод-мост", self.geo_notes_action)
         if self.settings_action:
             self.iface.removePluginMenu("Лесовод-мост", self.settings_action)
 
@@ -107,3 +121,52 @@ class LesovodBridgePlugin:
         if read_errors:
             message += "\n\nПропущено строк с нераспознанной геометрией:\n" + "\n".join(read_errors)
         QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", message)
+
+    def run_show_geo_notes(self):
+        """Метки, которые рабочие оставляют с телефона (GET /api/map/geo-notes.geojson
+        на сервере «Лесовод», см. app/routers/map.py) — до этой кнопки их приходилось
+        подключать вручную через «Добавить слой -> Добавить векторный слой -> протокол
+        HTTP(S)», каждый раз вручную собирая URL с токеном. Тот же токен, что и для
+        публикации лесосек (см. publisher._auth_headers) — один и тот же QGIS-мост."""
+        values = settings.load()
+        base_url = values["lesovod_base_url"]
+        token = values["lesovod_token"]
+
+        if not base_url:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Лесовод-мост",
+                "Не задан адрес сервера «Лесовод» (настройки плагина).",
+            )
+            return
+        if not token:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "Лесовод-мост",
+                "Не задан токен сервера «Лесовод» (настройки плагина -> «Токен»).",
+            )
+            return
+
+        url = base_url.rstrip("/") + GEO_NOTES_PATH + "?" + urlparse.urlencode({"token": token})
+
+        # /vsicurl/ — виртуальная файловая система GDAL/OGR для чтения по HTTP(S) без
+        # промежуточного скачивания плагином самому — тот же механизм, что использовал бы
+        # пользователь через диалог "Добавить векторный слой" вручную.
+        layer = QgsVectorLayer(f"/vsicurl/{url}", GEO_NOTES_LAYER_NAME, "ogr")
+        if not layer.isValid():
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Лесовод-мост",
+                "Не удалось загрузить слой меток — проверьте адрес сервера и токен в настройках плагина.",
+            )
+            return
+
+        project = QgsProject.instance()
+        for existing in project.mapLayersByName(GEO_NOTES_LAYER_NAME):
+            project.removeMapLayer(existing.id())
+
+        project.addMapLayer(layer)
+        self.iface.messageBar().pushSuccess(
+            "Лесовод-мост",
+            f"Слой «{GEO_NOTES_LAYER_NAME}» добавлен — {layer.featureCount()} меток.",
+        )
