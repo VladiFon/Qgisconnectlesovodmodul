@@ -65,7 +65,13 @@ def _auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+# Сервер стоит за Cloudflare, который отвечает 403 "error code: 1010" на
+# стандартный User-Agent "Python-urllib/…" — представляемся своим именем.
+USER_AGENT = "LesovodBridge/0.2.2 (QGIS plugin)"
+
+
 def _request(method, url, headers, data=None):
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json", **headers}
     req = urlrequest.Request(url, data=data, method=method, headers=headers)
     try:
         with urlrequest.urlopen(req, timeout=30) as resp:
@@ -200,35 +206,49 @@ def _coords_look_like_degrees(geometry):
     return True
 
 
-def to_wgs84(features, source_epsg=None):
-    """Сервер ждёт GeoJSON в градусах (EPSG:4326). База ГИСлесхоз может хранить
-    метры (UTM 35N и т.п.) — тогда пересчитываем по EPSG из настроек."""
-    if all(_coords_look_like_degrees(f.get("geometry")) for f in features):
-        return features
-    if not source_epsg:
-        raise PublishError(
-            "Координаты лесосек не в градусах (похоже на метры). Укажите в настройках плагина "
-            "EPSG системы координат базы ГИСлесхоз (например, 32635 — UTM 35N) и опубликуйте снова."
-        )
-    from osgeo import ogr, osr
+def _transformer(epsg):
+    from osgeo import osr
 
     src = osr.SpatialReference()
-    if src.ImportFromEPSG(int(source_epsg)) != 0:
-        raise PublishError(f"Неизвестный EPSG: {source_epsg}")
+    if src.ImportFromEPSG(int(epsg)) != 0:
+        raise PublishError(f"Неизвестный EPSG: {epsg}")
     dst = osr.SpatialReference()
     dst.ImportFromEPSG(4326)
     for srs in (src, dst):
         if hasattr(srs, "SetAxisMappingStrategy"):  # GDAL 3: порядок x=долгота, y=широта
             srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    transform = osr.CoordinateTransformation(src, dst)
+    return osr.CoordinateTransformation(src, dst)
 
+
+def to_wgs84(features, source_epsg=None):
+    """Сервер ждёт GeoJSON в градусах (EPSG:4326). База ГИСлесхоз хранит метры
+    (UTM 35N, SRID 32635 прямо в геометрии) — пересчитываем. EPSG из настроек
+    плагина важнее SRID из базы; без обоих — понятная ошибка.
+    Служебный ключ "srid" из db_reader на сервер не отправляется."""
+    transforms = {}
     out = []
     for feature in features:
+        srid = feature.get("srid")
+        clean = {k: v for k, v in feature.items() if k != "srid"}
+        if _coords_look_like_degrees(feature.get("geometry")):
+            out.append(clean)
+            continue
+        epsg = source_epsg or srid
+        if not epsg:
+            raise PublishError(
+                "Координаты лесосек не в градусах (похоже на метры), а система координат в базе не указана. "
+                "Укажите в настройках плагина EPSG базы ГИСлесхоз (например, 32635 — UTM 35N) и опубликуйте снова."
+            )
+        if epsg not in transforms:
+            transforms[epsg] = _transformer(epsg)
+        from osgeo import ogr
+
         geom = ogr.CreateGeometryFromJson(json.dumps(feature["geometry"]))
         if geom is None:
             continue
-        geom.Transform(transform)
-        out.append({**feature, "geometry": json.loads(geom.ExportToJson())})
+        geom.Transform(transforms[epsg])
+        clean["geometry"] = json.loads(geom.ExportToJson())
+        out.append(clean)
     return out
 
 

@@ -4,6 +4,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
 
 from . import db_reader, publisher, server_layers, settings
+from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
 
 
@@ -15,6 +16,7 @@ class LesovodBridgePlugin:
     def __init__(self, iface):
         self.iface = iface
         self.publish_action = None
+        self.export_action = None
         self.settings_action = None
         self.layer_actions = []
 
@@ -26,6 +28,10 @@ class LesovodBridgePlugin:
         self.publish_action.triggered.connect(self.run_publish)
         self.iface.addToolBarIcon(self.publish_action)
         self.iface.addPluginToMenu("Лесовод-мост", self.publish_action)
+
+        self.export_action = QAction("Выгрузить лесосеки в shp…", self.iface.mainWindow())
+        self.export_action.triggered.connect(self.run_export)
+        self.iface.addPluginToMenu("Лесовод-мост", self.export_action)
 
         # слои с сервера: метки рабочих с фото, делянки по статусу, культуры, обмеры
         for title, handler in (
@@ -48,6 +54,8 @@ class LesovodBridgePlugin:
         if self.publish_action:
             self.iface.removeToolBarIcon(self.publish_action)
             self.iface.removePluginMenu("Лесовод-мост", self.publish_action)
+        if self.export_action:
+            self.iface.removePluginMenu("Лесовод-мост", self.export_action)
         if self.settings_action:
             self.iface.removePluginMenu("Лесовод-мост", self.settings_action)
         for action in self.layer_actions:
@@ -59,7 +67,10 @@ class LesovodBridgePlugin:
         if dialog.exec_():
             dialog.save()
 
-    def run_publish(self):
+    def _read_lesoseki(self):
+        """Читает лесосеки из базы ГИСлесхоз (только чтение). Возвращает
+        (features, read_errors) или None, если чтение не удалось — тогда
+        пользователю уже показано сообщение."""
         values = settings.load()
 
         missing = [
@@ -80,7 +91,7 @@ class LesovodBridgePlugin:
                 + ", ".join(missing)
                 + ".\nОткройте «Лесовод-мост -> Настройки Лесовод-моста…».",
             )
-            return
+            return None
 
         try:
             features, read_errors = db_reader.fetch_lesoseki(
@@ -96,7 +107,7 @@ class LesovodBridgePlugin:
                 "Лесовод-мост",
                 f"Не удалось прочитать базу ГИСлесхоз (только чтение):\n{exc}",
             )
-            return
+            return None
 
         if not features:
             QMessageBox.warning(
@@ -105,7 +116,15 @@ class LesovodBridgePlugin:
                 "В таблице area не нашлось ни одной лесосеки с распознанной геометрией."
                 + (("\n\nПредупреждения:\n" + "\n".join(read_errors)) if read_errors else ""),
             )
+            return None
+        return features, read_errors
+
+    def run_publish(self):
+        values = settings.load()
+        read = self._read_lesoseki()
+        if read is None:
             return
+        features, read_errors = read
 
         try:
             result = publisher.publish(
@@ -133,6 +152,22 @@ class LesovodBridgePlugin:
         if read_errors:
             message += "\n\nПропущено строк с нераспознанной геометрией:\n" + "\n".join(read_errors)
         QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", message)
+
+    def run_export(self):
+        read = self._read_lesoseki()
+        if read is None:
+            return
+        features, read_errors = read
+        if read_errors:
+            self.iface.messageBar().pushWarning(
+                "Лесовод-мост", f"Пропущено лесосек с нераспознанной геометрией: {len(read_errors)}"
+            )
+        dialog = ExportDialog(
+            features, fallback_epsg=settings.load().get("source_epsg") or None, parent=self.iface.mainWindow()
+        )
+        if dialog.exec_() and dialog.saved_path:
+            name = os.path.splitext(os.path.basename(dialog.saved_path))[0]
+            self.iface.addVectorLayer(dialog.saved_path, name, "ogr")
 
     # ------------------------------------------------------ слои с сервера ---
 

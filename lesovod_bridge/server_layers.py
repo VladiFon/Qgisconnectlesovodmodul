@@ -77,6 +77,16 @@ def _replace_layer(kind, layer):
 
 
 def _load(url, title):
+    # GDAL качает слой сам; его User-Agent по умолчанию Cloudflare может отсечь
+    # (403, error code 1010), как и у urllib — ставим тот же, что в publisher.
+    try:
+        from osgeo import gdal
+
+        from .publisher import USER_AGENT
+
+        gdal.SetConfigOption("GDAL_HTTP_USERAGENT", USER_AGENT)
+    except ImportError:
+        pass
     layer = QgsVectorLayer(url, title, "ogr")
     if not layer.isValid():
         raise ServerLayerError(
