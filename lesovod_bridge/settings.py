@@ -23,6 +23,7 @@ DEFAULTS = {
     "lesovod_base_url": "https://lesovodapipom.store",
     "lesovod_token": "",
     "lesnichestvo_num": "",
+    "source_epsg": "",
 }
 
 
