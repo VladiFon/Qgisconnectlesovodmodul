@@ -65,7 +65,13 @@ def _auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+# Сервер стоит за Cloudflare, который отвечает 403 "error code: 1010" на
+# стандартный User-Agent "Python-urllib/…" — представляемся своим именем.
+USER_AGENT = "LesovodBridge/0.2.2 (QGIS plugin)"
+
+
 def _request(method, url, headers, data=None):
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json", **headers}
     req = urlrequest.Request(url, data=data, method=method, headers=headers)
     try:
         with urlrequest.urlopen(req, timeout=30) as resp:
