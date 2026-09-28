@@ -49,11 +49,14 @@ class LesovodBridgeSettingsDialog(QDialog):
         self.lesovod_token = QLineEdit(values["lesovod_token"])
         self.lesovod_token.setEchoMode(QLineEdit.Password)
         self.lesnichestvo_num = QLineEdit(values["lesnichestvo_num"])
-        self.lesnichestvo_num.setPlaceholderText("необязательно — фильтр/метка лесничества")
+        self.lesnichestvo_num.setPlaceholderText("необязательно — иначе по полю лесничества в area")
+        self.source_epsg = QLineEdit(values.get("source_epsg", ""))
+        self.source_epsg.setPlaceholderText("необязательно — если координаты в метрах, напр. 32635")
 
         server_form.addRow("Адрес сервера:", self.lesovod_base_url)
         server_form.addRow("Токен (Bearer):", self.lesovod_token)
         server_form.addRow("Номер лесничества:", self.lesnichestvo_num)
+        server_form.addRow("EPSG базы ГИСлесхоз:", self.source_epsg)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -74,4 +77,5 @@ class LesovodBridgeSettingsDialog(QDialog):
             "lesovod_base_url": self.lesovod_base_url.text().strip().rstrip("/"),
             "lesovod_token": self.lesovod_token.text().strip(),
             "lesnichestvo_num": self.lesnichestvo_num.text().strip(),
+            "source_epsg": self.source_epsg.text().strip(),
         })
