@@ -3,7 +3,7 @@ import os
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QInputDialog, QMessageBox
 
-from . import db_reader, okraska, publisher, server_layers, settings
+from . import db_reader, okraska, otmetit_lk, publisher, server_layers, settings
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
 
@@ -40,6 +40,7 @@ class LesovodBridgePlugin:
             ("Делянки по виду рубки (ССР, УЗ, ПРЖ…)", self.run_add_delyanki_vid),
             ("Делянки по виду пользования", self.run_add_delyanki_gruppa),
             ("Лесные культуры по виду", self.run_add_lesokultury),
+            ("Отметить выбранное как лесные культуры…", self.run_otmetit_lk),
             ("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid),
             ("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования", self.run_okrasit_gisleshoz_gruppa),
             ("Обмеры с телефона", self.run_add_tracks),
@@ -237,6 +238,33 @@ class LesovodBridgePlugin:
 
     def run_okrasit_gisleshoz_gruppa(self):
         self._okrasit_gisleshoz("gruppa")
+
+    def run_otmetit_lk(self):
+        """Выделенные полигоны активного слоя -> участки лесных культур в «Лесоводе»."""
+        layer = self.iface.activeLayer()
+        try:
+            features = otmetit_lk.vybrannye(layer)
+        except otmetit_lk.OtmetkaError as exc:
+            QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        values = settings.load()
+        legendy = okraska.load_legendy(values["lesovod_base_url"], values["lesovod_token"])
+        dialog = otmetit_lk.OtmetkaDialog(features, legendy.get("vidy_kultur") or [], self.iface.mainWindow())
+        if dialog.exec_() != dialog.Accepted:
+            return
+        sozdano, ploshad = 0, 0.0
+        try:
+            for body in dialog.zapisi(layer, values["lesnichestvo_num"]):
+                result = otmetit_lk.otpravit(values["lesovod_base_url"], values["lesovod_token"], body)
+                sozdano += 1
+                ploshad += float(result.get("ploshad_kontura") or 0)
+        except otmetit_lk.OtmetkaError as exc:
+            QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост",
+                                 f"Отмечено участков: {sozdano}.\n{exc}")
+            return
+        server_layers.reload_all()
+        self.iface.messageBar().pushSuccess(
+            "Лесовод-мост", f"Отмечено как лесные культуры: {sozdano} уч., {ploshad:.2f} га — видно на сайте и в слое «Лесные культуры по виду»")
 
     def run_add_lesokultury(self):
         self._add_server_layer(server_layers.add_lesokultury, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)
