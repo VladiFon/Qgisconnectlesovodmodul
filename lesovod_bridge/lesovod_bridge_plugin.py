@@ -1,9 +1,9 @@
 import os
 
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QMessageBox
+from qgis.PyQt.QtWidgets import QAction, QInputDialog, QMessageBox
 
-from . import db_reader, publisher, server_layers, settings
+from . import db_reader, okraska, publisher, server_layers, settings
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
 
@@ -37,7 +37,11 @@ class LesovodBridgePlugin:
         for title, handler in (
             ("Метки рабочих (с фото)", self.run_add_geo_notes),
             ("Делянки по статусу работ", self.run_add_delyanki),
-            ("Лесные культуры", self.run_add_lesokultury),
+            ("Делянки по виду рубки (ССР, УЗ, ПРЖ…)", self.run_add_delyanki_vid),
+            ("Делянки по виду пользования", self.run_add_delyanki_gruppa),
+            ("Лесные культуры по виду", self.run_add_lesokultury),
+            ("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid),
+            ("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования", self.run_okrasit_gisleshoz_gruppa),
             ("Обмеры с телефона", self.run_add_tracks),
             ("Обновить слои Лесовода", self.run_reload),
         ):
@@ -189,6 +193,50 @@ class LesovodBridgePlugin:
 
     def run_add_delyanki(self):
         self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)
+
+    def run_add_delyanki_vid(self):
+        self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None,
+                               rezhim="vid")
+
+    def run_add_delyanki_gruppa(self):
+        self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None,
+                               rezhim="gruppa")
+
+    def _okrasit_gisleshoz(self, rezhim):
+        """Стиль слоя «Лесосеки» ГИСлесхоза (или его выгрузки) по cuttingtyp /
+        usetype — только в проекте QGIS, база ГИСлесхоза не меняется."""
+        layers = okraska.gisleshoz_lesoseki_layers()
+        if not layers:
+            QMessageBox.information(
+                self.iface.mainWindow(), "Лесовод-мост",
+                "В проекте нет слоя лесосек ГИСлесхоза (с полями cuttingtyp / usetype). "
+                "Инициализируйте проект в ГИСлесхозе или добавьте слой «Лесосеки».")
+            return
+        layer = layers[0]
+        active = self.iface.activeLayer()
+        if len(layers) > 1:
+            names = [lr.name() for lr in layers]
+            current = names.index(active.name()) if active in layers else 0
+            name, ok = QInputDialog.getItem(self.iface.mainWindow(), "Лесовод-мост", "Какой слой раскрасить:",
+                                            names, current, False)
+            if not ok:
+                return
+            layer = layers[names.index(name)]
+        values = settings.load()
+        legendy = okraska.load_legendy(values["lesovod_base_url"], values["lesovod_token"])
+        try:
+            okraska.okrasit_gisleshoz(layer, rezhim, legendy)
+        except ValueError as exc:
+            QMessageBox.warning(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        self.iface.messageBar().pushInfo("Лесовод-мост", f"Слой «{layer.name()}» раскрашен, легенда — в панели слоёв")
+
+    def run_okrasit_gisleshoz_vid(self):
+        self._okrasit_gisleshoz("vid")
+
+    def run_okrasit_gisleshoz_gruppa(self):
+        self._okrasit_gisleshoz("gruppa")
 
     def run_add_lesokultury(self):
         self._add_server_layer(server_layers.add_lesokultury, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)

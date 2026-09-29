@@ -8,9 +8,11 @@
 
 - Метки рабочих — точки с цветом по типу, подписью (текст метки), а во
   всплывающей подсказке (Map Tips) — тип, автор, дата и фото.
-- Делянки — выделы с делянками, цвет по статусу работ (ожидает / в работе /
-  выполнено — те же цвета, что на телефоне и на сайте).
-- Лесные культуры — выделы с участками лесных культур.
+- Делянки — выделы с делянками (или свой контур лесосеки) с легендой: по
+  статусу работ, по виду рубки (ССР, УЗ, ПРЖ…) или по виду пользования —
+  те же цвета, что на телефоне и на сайте (см. okraska.py).
+- Лесные культуры — участки с легендой по виду культур (обычные, под
+  пологом, плантационные, ландшафтные…).
 - Обмеры с телефона — контуры, обойдённые рабочими по GPS, с площадью.
 """
 
@@ -30,6 +32,8 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
 )
 from qgis.PyQt.QtGui import QColor
+
+from . import okraska
 
 _KIND_PROPERTY = "lesovod_bridge/kind"
 
@@ -120,29 +124,44 @@ def add_geo_notes(base_url, token):
     return _replace_layer("geo_notes", layer)
 
 
-def add_delyanki(base_url, token, lesnichestvo_num=None):
+DELYANKI_TITLES = {
+    "status": "Делянки по статусу (Лесовод)",
+    "vid": "Делянки по виду рубки (Лесовод)",
+    "gruppa": "Делянки по виду пользования (Лесовод)",
+}
+
+
+def add_delyanki(base_url, token, lesnichestvo_num=None, rezhim="status"):
+    """rezhim: status — по статусу работ, vid — по виду рубки (ССР, УЗ…),
+    gruppa — по виду пользования (главное / промежуточное / прочие)."""
     url = _url(base_url, "/api/map/qgis/delyanki.geojson", token, lesnichestvo_num=lesnichestvo_num)
-    layer = _load(url, "Делянки по статусу (Лесовод)")
-    symbol = QgsFillSymbol.createSimple({"color": "#ff9800", "outline_color": "#333333", "outline_width": "0.4"})
-    symbol.symbolLayer(0).setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, QgsProperty.fromExpression("set_color_part(\"color\", 'alpha', 120)"))
-    symbol.symbolLayer(0).setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeColor, QgsProperty.fromField("color"))
-    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-    _labels(layer, 'coalesce("nazvanie", \'\') || \'\\n\' || coalesce("status_rabot", \'\')')
+    layer = _load(url, DELYANKI_TITLES[rezhim])
+    layer.setRenderer(okraska.renderer_delyanok(rezhim, okraska.load_legendy(base_url, token)))
+    podpis = {
+        "status": 'coalesce("status_rabot", \'\')',
+        "vid": 'coalesce("vid_rubki_kod", \'\')',
+        "gruppa": 'coalesce("vid_rubki_kod", \'\')',
+    }[rezhim]
+    _labels(layer, 'coalesce("nazvanie", \'\') || \'\\n\' || ' + podpis)
     layer.setMapTipTemplate(
         "<b>[% coalesce(\"nazvanie\", 'Делянка') %]</b><br>"
-        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %]<br>Статус: [% \"status_rabot\" %]"
+        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %]<br>Статус: [% \"status_rabot\" %]<br>"
+        "Вид рубки: [% coalesce(\"vid_rubki\", '—') %]<br>[% coalesce(\"gruppa_label\", '') %]"
     )
-    return _replace_layer("delyanki", layer)
+    return _replace_layer("delyanki_" + rezhim, layer)
 
 
 def add_lesokultury(base_url, token, lesnichestvo_num=None):
     url = _url(base_url, "/api/map/qgis/lesokultury.geojson", token, lesnichestvo_num=lesnichestvo_num)
-    layer = _load(url, "Лесные культуры (Лесовод)")
-    symbol = QgsFillSymbol.createSimple({
-        "color": "0,229,255,40", "outline_color": "#00b8d4", "outline_width": "0.6", "outline_style": "dash",
-    })
-    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    layer = _load(url, "Лесные культуры по виду (Лесовод)")
+    layer.setRenderer(okraska.renderer_kultur(okraska.load_legendy(base_url, token)))
     _labels(layer, 'coalesce("glavnaya_poroda", \'\') || \' \' || coalesce("god_sozdaniya", \'\')', color="#006064")
+    layer.setMapTipTemplate(
+        "<b>[% coalesce(\"vid_kultur\", 'Лесные культуры') %]</b><br>"
+        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %]<br>"
+        "[% coalesce(\"glavnaya_poroda\", '') %] [% coalesce(\"god_sozdaniya\", '') %], "
+        "[% coalesce(to_string(\"ploshad\"), '') %] га"
+    )
     return _replace_layer("lesokultury", layer)
 
 
