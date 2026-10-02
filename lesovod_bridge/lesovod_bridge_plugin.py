@@ -1,71 +1,149 @@
 import os
 
+from qgis.core import QgsApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QInputDialog, QMessageBox
+from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessageBox, QToolButton
 
 from . import db_reader, okraska, otmetit_lk, publisher, server_layers, settings
+from .chto_zdes import ChtoZdes
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
+
+MENU = "Лесовод-мост"
+
+
+def _icon(name):
+    path = os.path.join(os.path.dirname(__file__), "icons", name)
+    return QIcon(path) if os.path.exists(path) else QIcon()
 
 
 class LesovodBridgePlugin:
     """Отдельный плагин «Лесовод-мост». Не редактирует и не встраивается
-    в плагин ГИСлесхоз — работает рядом, своей отдельной кнопкой в
-    панели инструментов QGIS."""
+    в плагин ГИСлесхоз — работает рядом, своей панелью инструментов
+    «Лесовод-мост» (всё основное — в один щелчок) и меню Модули -> Лесовод-мост."""
 
     def __init__(self, iface):
         self.iface = iface
-        self.publish_action = None
-        self.export_action = None
-        self.settings_action = None
-        self.layer_actions = []
+        self.toolbar = None
+        self.chto_zdes = None
+        self.menu_actions = []
+
+    def _action(self, title, handler, icon=None, tip=None, menu=True):
+        action = QAction(icon or QIcon(), title, self.iface.mainWindow())
+        action.triggered.connect(handler)
+        if tip:
+            action.setToolTip(tip)
+            action.setStatusTip(tip)
+        if menu:
+            self.iface.addPluginToMenu(MENU, action)
+            self.menu_actions.append(action)
+        return action
+
+    def _knopka_s_menyu(self, default, actions, tip, popup=QToolButton.MenuButtonPopup):
+        """Кнопка панели: щелчок — основное действие, стрелка — остальные."""
+        button = QToolButton(self.toolbar)
+        menu = QMenu(button)
+        for action in actions:
+            menu.addAction(action)
+        button.setMenu(menu)
+        button.setDefaultAction(default)
+        button.setPopupMode(popup)
+        button.setToolTip(tip)
+        self.toolbar.addWidget(button)
+        return button
 
     def initGui(self):
-        icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
-        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        self.chto_zdes = ChtoZdes(self.iface)
 
-        self.publish_action = QAction(icon, "Опубликовать в Лесовод", self.iface.mainWindow())
-        self.publish_action.triggered.connect(self.run_publish)
-        self.iface.addToolBarIcon(self.publish_action)
-        self.iface.addPluginToMenu("Лесовод-мост", self.publish_action)
+        # --- действия (они же — в меню Модули -> Лесовод-мост) -------------
+        self.chto_zdes_action = self._action(
+            "Что здесь — характеристики участка", self.run_chto_zdes, _icon("chto_zdes.svg"),
+            "Что здесь: щёлкните по карте — покажутся характеристики участка лесных культур, делянки, "
+            "обмера или метки в этой точке, какой бы слой ни был активным")
+        self.chto_zdes_action.setCheckable(True)
 
-        self.export_action = QAction("Выгрузить лесосеки в shp…", self.iface.mainWindow())
-        self.export_action.triggered.connect(self.run_export)
-        self.iface.addPluginToMenu("Лесовод-мост", self.export_action)
+        a_kultury = self._action("Лесные культуры по виду", self.run_add_lesokultury, _icon("kultury.svg"),
+                                 "Добавить / обновить слой «Лесные культуры» с сервера Лесовода")
+        a_del_status = self._action("Делянки по статусу работ", self.run_add_delyanki, _icon("delyanki.svg"),
+                                    "Делянки по статусу работ (ожидает / в работе / выполнено)")
+        a_del_vid = self._action("Делянки по виду рубки (ССР, УЗ, ПРЖ…)", self.run_add_delyanki_vid,
+                                 _icon("delyanki.svg"))
+        a_del_gruppa = self._action("Делянки по виду пользования", self.run_add_delyanki_gruppa, _icon("delyanki.svg"))
+        a_metki = self._action("Метки рабочих (с фото)", self.run_add_geo_notes,
+                               QgsApplication.getThemeIcon("/mActionAddMarker.svg"))
+        a_tracks = self._action("Обмеры с телефона", self.run_add_tracks,
+                                QgsApplication.getThemeIcon("/mActionMeasureArea.svg"))
+        a_otmetit = self._action("Отметить выбранное как лесные культуры…", self.run_otmetit_lk, _icon("otmetit.svg"),
+                                 "Выделенные полигоны активного слоя (выдел, лесосека) отметить как участок "
+                                 "лесных культур в Лесоводе")
+        a_okr_vid = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid,
+                                 _icon("okraska.svg"))
+        a_okr_gruppa = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования",
+                                    self.run_okrasit_gisleshoz_gruppa, _icon("okraska.svg"))
+        a_reload = self._action("Обновить слои Лесовода", self.run_reload,
+                                QgsApplication.getThemeIcon("/mActionRefresh.svg"),
+                                "Перечитать с сервера все слои Лесовода в проекте")
+        a_publish = self._action("Опубликовать в Лесовод", self.run_publish, _icon("publish.svg"),
+                                 "Отправить лесосеки из базы ГИСлесхоза на сервер Лесовода")
+        a_export = self._action("Выгрузить лесосеки в shp…", self.run_export, _icon("shp.svg"),
+                                "Выгрузить выбранные лесосеки ГИСлесхоза в shp (текущие изменения)")
+        a_settings = self._action("Настройки Лесовод-моста…", self.run_settings,
+                                  QgsApplication.getThemeIcon("/mActionOptions.svg"))
 
-        # слои с сервера: метки рабочих с фото, делянки по статусу, культуры, обмеры
-        for title, handler in (
-            ("Метки рабочих (с фото)", self.run_add_geo_notes),
-            ("Делянки по статусу работ", self.run_add_delyanki),
-            ("Делянки по виду рубки (ССР, УЗ, ПРЖ…)", self.run_add_delyanki_vid),
-            ("Делянки по виду пользования", self.run_add_delyanki_gruppa),
-            ("Лесные культуры по виду", self.run_add_lesokultury),
-            ("Отметить выбранное как лесные культуры…", self.run_otmetit_lk),
-            ("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid),
-            ("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования", self.run_okrasit_gisleshoz_gruppa),
-            ("Обмеры с телефона", self.run_add_tracks),
-            ("Обновить слои Лесовода", self.run_reload),
-        ):
-            action = QAction(title, self.iface.mainWindow())
-            action.triggered.connect(handler)
-            self.iface.addPluginToMenu("Лесовод-мост", action)
-            self.layer_actions.append(action)
+        # --- панель инструментов -------------------------------------------
+        self.toolbar = self.iface.addToolBar(MENU)
+        self.toolbar.setObjectName("LesovodBridgeToolbar")
+        self.toolbar.setToolTip("Лесовод-мост")
 
-        self.settings_action = QAction("Настройки Лесовод-моста…", self.iface.mainWindow())
-        self.settings_action.triggered.connect(self.run_settings)
-        self.iface.addPluginToMenu("Лесовод-мост", self.settings_action)
+        self.toolbar.addAction(self.chto_zdes_action)
+        self.poisk = QLineEdit(self.toolbar)
+        self.poisk.setPlaceholderText("кв выд: 35 12")
+        self.poisk.setToolTip("Найти квартал / выдел в слоях Лесовода и ГИСлесхоза: «35 12» или «35» и Enter")
+        self.poisk.setClearButtonEnabled(True)
+        self.poisk.setMaximumWidth(150)
+        self.poisk.returnPressed.connect(self.run_nayti)
+        self.toolbar.addWidget(self.poisk)
+        self.toolbar.addSeparator()
+
+        self.toolbar.addAction(a_kultury)
+        self._knopka_s_menyu(a_del_status, [a_del_status, a_del_vid, a_del_gruppa],
+                             "Делянки: щелчок — по статусу работ, стрелка — по виду рубки / виду пользования")
+        sloi = QAction(_icon("sloi.svg"), "Слои Лесовода", self.iface.mainWindow())
+        self._knopka_s_menyu(sloi, [a_kultury, a_del_status, a_del_vid, a_del_gruppa, a_metki, a_tracks],
+                             "Слои Лесовода: культуры, делянки, метки рабочих, обмеры с телефона",
+                             QToolButton.InstantPopup)
+        self.toolbar.addAction(a_reload)
+        self.toolbar.addSeparator()
+
+        self.toolbar.addAction(a_otmetit)
+        self._knopka_s_menyu(a_okr_vid, [a_okr_vid, a_okr_gruppa],
+                             "Раскрасить «Лесосеки» ГИСлесхоза: по виду рубки / по виду пользования")
+        self.toolbar.addSeparator()
+
+        self.toolbar.addAction(a_publish)
+        self.toolbar.addAction(a_export)
+        self.toolbar.addAction(a_settings)
 
     def unload(self):
-        if self.publish_action:
-            self.iface.removeToolBarIcon(self.publish_action)
-            self.iface.removePluginMenu("Лесовод-мост", self.publish_action)
-        if self.export_action:
-            self.iface.removePluginMenu("Лесовод-мост", self.export_action)
-        if self.settings_action:
-            self.iface.removePluginMenu("Лесовод-мост", self.settings_action)
-        for action in self.layer_actions:
-            self.iface.removePluginMenu("Лесовод-мост", action)
-        self.layer_actions = []
+        for action in self.menu_actions:
+            self.iface.removePluginMenu(MENU, action)
+        self.menu_actions = []
+        if self.chto_zdes:
+            self.chto_zdes.unload()
+            self.chto_zdes = None
+        if self.toolbar:
+            self.iface.mainWindow().removeToolBar(self.toolbar)
+            self.toolbar.deleteLater()
+            self.toolbar = None
+
+    def run_chto_zdes(self, checked=True):
+        if checked:
+            self.chto_zdes.vklyuchit(self.chto_zdes_action)
+        elif self.iface.mapCanvas().mapTool() is self.chto_zdes.tool:
+            self.iface.mapCanvas().unsetMapTool(self.chto_zdes.tool)
+
+    def run_nayti(self):
+        self.chto_zdes.nayti(self.poisk.text())
 
     def run_settings(self):
         dialog = LesovodBridgeSettingsDialog(self.iface.mainWindow())
