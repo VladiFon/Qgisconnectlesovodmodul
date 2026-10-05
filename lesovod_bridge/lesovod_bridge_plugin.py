@@ -4,7 +4,7 @@ from qgis.core import QgsApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessageBox, QToolButton
 
-from . import db_reader, okraska, otmetit_lk, publisher, server_layers, settings
+from . import db_reader, okraska, otmetit_lk, privyazat_delyanku, publisher, server_layers, settings
 from .chto_zdes import ChtoZdes
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
@@ -76,6 +76,10 @@ class LesovodBridgePlugin:
         a_otmetit = self._action("Отметить выбранное как лесные культуры…", self.run_otmetit_lk, _icon("otmetit.svg"),
                                  "Выделенные полигоны активного слоя (выдел, лесосека) отметить как участок "
                                  "лесных культур в Лесоводе")
+        a_delyanka = self._action("Привязать выбранное к делянке…", self.run_privyazat_delyanku,
+                                  _icon("delyanka_kontur.svg"),
+                                  "Выделенные полигоны активного слоя (лесосека, выдел) сделать контуром лесосеки "
+                                  "делянки в Лесоводе — уже заведённой на этом выделе или новой")
         a_okr_vid = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid,
                                  _icon("okraska.svg"))
         a_okr_gruppa = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования",
@@ -115,6 +119,7 @@ class LesovodBridgePlugin:
         self.toolbar.addAction(a_reload)
         self.toolbar.addSeparator()
 
+        self.toolbar.addAction(a_delyanka)
         self.toolbar.addAction(a_otmetit)
         self._knopka_s_menyu(a_okr_vid, [a_okr_vid, a_okr_gruppa],
                              "Раскрасить «Лесосеки» ГИСлесхоза: по виду рубки / по виду пользования")
@@ -343,6 +348,52 @@ class LesovodBridgePlugin:
         server_layers.reload_all()
         self.iface.messageBar().pushSuccess(
             "Лесовод-мост", f"Отмечено как лесные культуры: {sozdano} уч., {ploshad:.2f} га — видно на сайте и в слое «Лесные культуры по виду»")
+
+    def run_privyazat_delyanku(self):
+        """Выделенные полигоны -> контуры лесосек делянок в «Лесоводе»."""
+        layer = self.iface.activeLayer()
+        try:
+            features = otmetit_lk.vybrannye(layer)
+        except otmetit_lk.OtmetkaError as exc:
+            QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        values = settings.load()
+        if not values["lesovod_base_url"] or not values["lesovod_token"]:
+            QMessageBox.warning(self.iface.mainWindow(), "Лесовод-мост",
+                                "Не заданы адрес сервера «Лесовод» и токен — «Настройки Лесовод-моста…».")
+            return
+        legendy = okraska.load_legendy(values["lesovod_base_url"], values["lesovod_token"])
+        stroki = [privyazat_delyanku.stroka_iz_obekta(f, legendy, values["lesnichestvo_num"]) for f in features]
+        dialog = privyazat_delyanku.PrivyazkaDialog(stroki, legendy, values["lesovod_base_url"],
+                                                    values["lesovod_token"], self.iface.mainWindow())
+        if dialog.exec_() != dialog.Accepted:
+            return
+        privyazano, novyh, preduprezhdeniya = 0, 0, []
+        obshaya_delyanka = None
+        try:
+            for body, novaya in dialog.zapisi(layer):
+                if novaya and dialog.odnoy.isChecked() and obshaya_delyanka is not None:
+                    body["delyanka_id"] = obshaya_delyanka
+                result = privyazat_delyanku.otpravit(values["lesovod_base_url"], values["lesovod_token"], body)
+                if novaya:
+                    novyh += 1
+                    obshaya_delyanka = obshaya_delyanka or result.get("delyanka_id")
+                else:
+                    privyazano += 1
+                if result.get("warning"):
+                    preduprezhdeniya.append(f"кв. {body['kvartal']} выд. {body['vydel']}: {result['warning']}")
+        except otmetit_lk.OtmetkaError as exc:
+            QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост",
+                                 f"Привязано: {privyazano}, новых: {novyh}.\n{exc}")
+            return
+        server_layers.reload_all()
+        text = f"Контуров привязано к делянкам: {privyazano}, новых делянок/выделов: {novyh} — видно на сайте, " \
+               "в приложении и в слое «Делянки»"
+        if preduprezhdeniya:
+            QMessageBox.warning(self.iface.mainWindow(), "Лесовод-мост",
+                                text + ".\n\nПроверьте площадь:\n" + "\n".join(preduprezhdeniya))
+        else:
+            self.iface.messageBar().pushSuccess("Лесовод-мост", text)
 
     def run_add_lesokultury(self):
         self._add_server_layer(server_layers.add_lesokultury, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)
