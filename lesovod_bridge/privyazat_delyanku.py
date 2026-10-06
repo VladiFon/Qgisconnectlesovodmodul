@@ -15,6 +15,7 @@
 """
 
 import json
+import socket
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -74,6 +75,10 @@ def vybor_po_umolchaniyu(kandidaty):
     return rabochie[0]["item_id"] if len(rabochie) == 1 else NOVAYA
 
 
+class NetSvyazi(OtmetkaError):
+    """Сервер недоступен — дальше по строкам не спрашиваем (каждая — ожидание)."""
+
+
 def _zapros(base_url, token, path, params=None, body=None):
     from .publisher import USER_AGENT
 
@@ -87,7 +92,7 @@ def _zapros(base_url, token, path, params=None, body=None):
         headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"},
     )
     try:
-        with urlrequest.urlopen(req, timeout=30) as resp:
+        with urlrequest.urlopen(req, timeout=30 if body is not None else 10) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urlerror.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
@@ -99,7 +104,9 @@ def _zapros(base_url, token, path, params=None, body=None):
             text = "сервер ещё не обновлён (нет привязки делянок из QGIS)"
         raise OtmetkaError(f"Сервер «Лесовод» ответил {exc.code}: {text}") from exc
     except urlerror.URLError as exc:
-        raise OtmetkaError(f"Не удалось соединиться с сервером «Лесовод»: {exc.reason}") from exc
+        raise NetSvyazi(f"Не удалось соединиться с сервером «Лесовод»: {exc.reason}") from exc
+    except (socket.timeout, TimeoutError) as exc:
+        raise NetSvyazi("Сервер «Лесовод» не ответил вовремя") from exc
 
 
 def kandidaty(base_url, token, kvartal, vydel, lesnichestvo_num):
@@ -201,15 +208,21 @@ class PrivyazkaDialog(QDialog):
         return item.text().strip() if item else ""
 
     def zagruzit_kandidatov(self):
-        oshibki = []
+        oshibki, uzhe, net_svyazi = [], {}, False
         for row, s in enumerate(self.stroki):
             combo = self.table.cellWidget(row, self.COL_KUDA)
             combo.clear()
             kv, vd = self._text(row, self.COL_KV), self._text(row, self.COL_VD)
             spisok = []
-            if kv:
+            klyuch = (kv, vd, s["lesnichestvo_num"])
+            if kv and klyuch in uzhe:  # несколько полигонов одного выдела — один запрос
+                spisok = uzhe[klyuch]
+            elif kv and not net_svyazi:
                 try:
-                    spisok = kandidaty(self.base_url, self.token, kv, vd, s["lesnichestvo_num"])
+                    spisok = uzhe[klyuch] = kandidaty(self.base_url, self.token, kv, vd, s["lesnichestvo_num"])
+                except NetSvyazi as exc:
+                    net_svyazi = True
+                    oshibki.append(str(exc))
                 except OtmetkaError as exc:
                     oshibki.append(str(exc))
             combo.addItem("Новая делянка", NOVAYA)

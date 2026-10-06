@@ -1,6 +1,6 @@
 import os
 
-from qgis.core import QgsApplication
+from qgis.core import QgsApplication, QgsProject
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessageBox, QToolButton
 
@@ -10,6 +10,19 @@ from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
 
 MENU = "Лесовод-мост"
+
+
+def _gdal_timeouts():
+    """Слои старых проектов, подключённые прямо к URL сервера, QGIS открывает
+    сам ещё до плагина. У GDAL по умолчанию ожидание без конца — недоступный
+    сервер вешал QGIS намертво. Ставим предел, если его не задали до нас."""
+    try:
+        from osgeo import gdal
+    except ImportError:
+        return
+    for key, value in (("GDAL_HTTP_CONNECTTIMEOUT", "10"), ("GDAL_HTTP_TIMEOUT", "60")):
+        if not gdal.GetConfigOption(key):
+            gdal.SetConfigOption(key, value)
 
 
 def _icon(name):
@@ -27,6 +40,7 @@ class LesovodBridgePlugin:
         self.toolbar = None
         self.chto_zdes = None
         self.menu_actions = []
+        _gdal_timeouts()
 
     def _action(self, title, handler, icon=None, tip=None, menu=True):
         action = QAction(icon or QIcon(), title, self.iface.mainWindow())
@@ -129,7 +143,14 @@ class LesovodBridgePlugin:
         self.toolbar.addAction(a_export)
         self.toolbar.addAction(a_settings)
 
+        QgsProject.instance().readProject.connect(self._proekt_otkryt)
+        self._proekt_otkryt()
+
     def unload(self):
+        try:
+            QgsProject.instance().readProject.disconnect(self._proekt_otkryt)
+        except (TypeError, RuntimeError):
+            pass
         for action in self.menu_actions:
             self.iface.removePluginMenu(MENU, action)
         self.menu_actions = []
@@ -259,32 +280,44 @@ class LesovodBridgePlugin:
 
     # ------------------------------------------------------ слои с сервера ---
 
-    def _add_server_layer(self, add, **kwargs):
+    def _add_server_layer(self, kind, **params):
+        """Слой качается в фоне — QGIS не ждёт сервер; появится, когда скачается."""
         values = settings.load()
+        title = server_layers.VIDY[kind][1]
+
+        def gotovo(layer, oshibka):
+            if oshibka:
+                QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", oshibka)
+                return
+            if kind == "geo_notes":
+                # подсказки карты показывают фото метки при наведении
+                try:
+                    self.iface.actionMapTips().setChecked(True)
+                except AttributeError:
+                    pass
+            self.iface.messageBar().pushSuccess("Лесовод-мост", f"Слой «{title}» загружен: {layer.featureCount()} об.")
+
         try:
-            add(values["lesovod_base_url"], values["lesovod_token"], **kwargs)
+            server_layers.dobavit(kind, values["lesovod_base_url"], values["lesovod_token"], gotovo, **params)
         except server_layers.ServerLayerError as exc:
             QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", str(exc))
             return
-        # подсказки карты показывают фото метки при наведении
-        try:
-            self.iface.actionMapTips().setChecked(True)
-        except AttributeError:
-            pass
+        self.iface.messageBar().pushInfo("Лесовод-мост", f"Загружаю «{title}» с сервера — работать можно, слой появится сам")
+
+    def _lesnichestvo(self):
+        return settings.load()["lesnichestvo_num"] or None
 
     def run_add_geo_notes(self):
-        self._add_server_layer(server_layers.add_geo_notes)
+        self._add_server_layer("geo_notes")
 
     def run_add_delyanki(self):
-        self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)
+        self._add_server_layer("delyanki_status", lesnichestvo_num=self._lesnichestvo())
 
     def run_add_delyanki_vid(self):
-        self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None,
-                               rezhim="vid")
+        self._add_server_layer("delyanki_vid", lesnichestvo_num=self._lesnichestvo())
 
     def run_add_delyanki_gruppa(self):
-        self._add_server_layer(server_layers.add_delyanki, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None,
-                               rezhim="gruppa")
+        self._add_server_layer("delyanki_gruppa", lesnichestvo_num=self._lesnichestvo())
 
     def _okrasit_gisleshoz(self, rezhim):
         """Стиль слоя «Лесосеки» ГИСлесхоза (или его выгрузки) по cuttingtyp /
@@ -345,7 +378,7 @@ class LesovodBridgePlugin:
             QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост",
                                  f"Отмечено участков: {sozdano}.\n{exc}")
             return
-        server_layers.reload_all()
+        self._obnovit_sloi(tiho=True)
         self.iface.messageBar().pushSuccess(
             "Лесовод-мост", f"Отмечено как лесные культуры: {sozdano} уч., {ploshad:.2f} га — видно на сайте и в слое «Лесные культуры по виду»")
 
@@ -386,7 +419,7 @@ class LesovodBridgePlugin:
             QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост",
                                  f"Привязано: {privyazano}, новых: {novyh}.\n{exc}")
             return
-        server_layers.reload_all()
+        self._obnovit_sloi(tiho=True)
         text = f"Контуров привязано к делянкам: {privyazano}, новых делянок/выделов: {novyh} — видно на сайте, " \
                "в приложении и в слое «Делянки»"
         if preduprezhdeniya:
@@ -396,11 +429,34 @@ class LesovodBridgePlugin:
             self.iface.messageBar().pushSuccess("Лесовод-мост", text)
 
     def run_add_lesokultury(self):
-        self._add_server_layer(server_layers.add_lesokultury, lesnichestvo_num=settings.load()["lesnichestvo_num"] or None)
+        self._add_server_layer("lesokultury", lesnichestvo_num=self._lesnichestvo())
 
     def run_add_tracks(self):
-        self._add_server_layer(server_layers.add_tracks)
+        self._add_server_layer("tracks")
+
+    def _obnovit_sloi(self, tiho=False):
+        """Перекачать слои Лесовода в фоне. tiho — без сообщения «начал»."""
+        values = settings.load()
+
+        def gotovo(obnovleno, oshibki):
+            if oshibki:
+                spisok = "; ".join(f"«{server_layers.VIDY[k][1]}»: {t}" for k, t in oshibki.items())
+                self.iface.messageBar().pushWarning(
+                    "Лесовод-мост", f"Не обновлены слои {spisok}. На карте — последняя скачанная копия.")
+            if obnovleno:
+                self.iface.messageBar().pushSuccess("Лесовод-мост", f"Слои Лесовода обновлены: {obnovleno}")
+
+        count = server_layers.reload_all(values["lesovod_base_url"], values["lesovod_token"], gotovo)
+        if not tiho:
+            self.iface.messageBar().pushInfo(
+                "Лесовод-мост", f"Обновляю слоёв: {count} — в фоне, работать можно" if count else "Слоёв Лесовода в проекте нет")
+        return count
 
     def run_reload(self):
-        count = server_layers.reload_all()
-        self.iface.messageBar().pushInfo("Лесовод-мост", f"Обновлено слоёв: {count}" if count else "Слоёв Лесовода в проекте нет")
+        self._obnovit_sloi()
+
+    def _proekt_otkryt(self, *_args):
+        """Проект со слоями старой версии (подключены прямо к URL — из-за этого
+        QGIS и вис) или с потерянной локальной копией — перевести на копию."""
+        if server_layers.nuzhno_perevesti():
+            self._obnovit_sloi(tiho=True)
