@@ -219,15 +219,32 @@ def _v_geopackage(kind, data):
     src, dst = stem + ".geojson", stem + ".gpkg"
     with open(src, "wb") as f:
         f.write(data)
+    # GDAL после первой ошибки сыплет следующими (откат, триггеры) — человеку
+    # нужна первая, настоящая причина
+    oshibki = []
+
+    def lovit(klass, _nomer, tekst):
+        if klass >= gdal.CE_Failure:
+            oshibki.append(tekst)
+
+    gdal.PushErrorHandler(lovit)
     try:
+        # -unsetFid: поле «id» из GeoJSON — не ключ слоя. У культур один
+        # участок в нескольких выделах = несколько объектов с одним id; без
+        # этого GDAL (3.6 и ниже) делает id первичным ключом GeoPackage и
+        # падает на втором объекте (UNIQUE constraint failed: lesokultury.id,
+        # а в сообщение попадает «no such table» про триггер). Ключ — свой
+        # счётчик fid, а id остаётся обычным полем (нужен «Что здесь»).
         result = gdal.VectorTranslate(
-            dst, src, format="GPKG", layerName=kind,
+            dst, src, options=["-unsetFid"], format="GPKG", layerName=kind,
             geometryType="POINT" if kind in TOCHECHNYE else "MULTIPOLYGON",
         )
         if result is None:
-            raise ServerLayerError(f"не удалось разобрать GeoJSON с сервера: {gdal.GetLastErrorMsg()}")
+            prichina = oshibki[0] if oshibki else gdal.GetLastErrorMsg()
+            raise ServerLayerError(f"не удалось разобрать GeoJSON с сервера: {prichina}")
         result = None  # закрыть файл
     finally:
+        gdal.PopErrorHandler()
         try:
             os.remove(src)
         except OSError:
