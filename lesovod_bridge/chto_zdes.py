@@ -13,6 +13,7 @@
 инструментом выбора, и после поиска «кв 35 выд 12» на панели инструментов.
 """
 
+from itertools import islice
 from urllib import parse as urlparse
 
 from qgis.core import (
@@ -150,7 +151,7 @@ class ChtoZdes:
             if lr is None or lr.selectedFeatureCount() == 0:
                 return
             kind = lesovod_kind(lr)
-            naydeno = [(kind, lr, f) for f in list(lr.getSelectedFeatures())[:MAX_KARTOCHEK]]
+            naydeno = [(kind, lr, f) for f in islice(lr.getSelectedFeatures(), MAX_KARTOCHEK)]
             self.pokazat(naydeno, zagolovok=f"Выделено на слое «{lr.name()}»: {lr.selectedFeatureCount()}",
                          podsvetit=False)
 
@@ -243,12 +244,18 @@ class ChtoZdes:
             vydely = kartochki.iz_polya(attrs, kartochki.VD_FIELDS).replace(";", ",").split(",")
             return any(kartochki.norm_id(v.split(".")[0]) == vd or kartochki.norm_id(v) == vd for v in vydely)
 
+        def v_sloe(layer):
+            # перебор — без геометрии (большой слой ГИСлесхоза из базы), геометрия — только найденным
+            bez_geom = QgsFeatureRequest().setFlags(QgsFeatureRequest.NoGeometry)
+            ids = [f.id() for f in layer.getFeatures(bez_geom) if podkhodit(_attrs(f))]
+            return list(layer.getFeatures(QgsFeatureRequest().setFilterFids(ids))) if ids else []
+
         naydeno = []
         for kind, layer in self._sloi():
-            naydeno.extend((kind, layer, f) for f in layer.getFeatures() if podkhodit(_attrs(f)))
+            naydeno.extend((kind, layer, f) for f in v_sloe(layer))
         if not naydeno:
             for layer in self._sloi_gisleshoza():
-                naydeno.extend((None, layer, f) for f in layer.getFeatures() if podkhodit(_attrs(f)))
+                naydeno.extend((None, layer, f) for f in v_sloe(layer))
                 if naydeno:
                     break
         mesto = f"кв. {kv}" + (f" выд. {vd}" if vd else "")

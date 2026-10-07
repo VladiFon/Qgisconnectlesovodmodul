@@ -13,6 +13,7 @@
 """
 
 import json
+import time
 import os
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -47,20 +48,35 @@ def _default_legendy():
         return json.load(f)
 
 
+# справочник с сервера на время работы QGIS: раньше его качали заново при
+# каждом добавлении слоя и каждом диалоге (до 15 с ожидания на каждый)
+_KESH = {}
+KESH_SEKUND = 600
+NET_SVYAZI_SEKUND = 60  # после неудачи не стучимся снова минуту
+
+
 def load_legendy(base_url=None, token=None):
     """Справочник с сервера; старый сервер или нет связи — встроенный."""
     if base_url and token:
         from .publisher import USER_AGENT
 
+        klyuch = (base_url.rstrip("/"), token)
+        zapis = _KESH.get(klyuch)
+        if zapis and time.time() - zapis[0] < (KESH_SEKUND if zapis[1] else NET_SVYAZI_SEKUND):
+            return zapis[1] or _default_legendy()
         url = base_url.rstrip("/") + "/api/map/qgis/legendy.json?" + urlparse.urlencode({"token": token})
         req = urlrequest.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        data = None
         try:
-            with urlrequest.urlopen(req, timeout=15) as resp:
+            with urlrequest.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, dict) and data.get("vidy_rubok"):
-                return data
+            if not (isinstance(data, dict) and data.get("vidy_rubok")):
+                data = None
         except Exception:  # noqa: BLE001 — нет связи / сервер без этого адреса
-            pass
+            data = None
+        _KESH[klyuch] = (time.time(), data)
+        if data:
+            return data
     return _default_legendy()
 
 
