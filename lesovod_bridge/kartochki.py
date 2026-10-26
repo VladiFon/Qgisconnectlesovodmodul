@@ -44,6 +44,17 @@ POLYA_OBMERA = [
     ("note_text", "Примечание"),
 ]
 
+POLYA_PROBY = [
+    ("uchastok", "Участок культур"),
+    ("forma", "Форма"),
+    ("ploshad_m2", "Площадь, м²"),
+    ("etapy", "Учёты"),
+    ("orientir", "Ориентир"),
+    ("tochnost_m", "Точность GPS, м"),
+    ("avtor_fio", "Поставил"),
+    ("created_at", "Дата"),
+]
+
 POLYA_METKI = [
     ("note_text", "Текст"),
     ("author_fio", "Автор"),
@@ -142,6 +153,13 @@ def obmer(attrs):
     return _kartochka(zagolovok, "#00c853", _mesto(attrs), _stroki(attrs, POLYA_OBMERA))
 
 
+def proba(attrs):
+    """Пробная площадь лесных культур — на ней тех. приёмка и инвентаризации 1-го и 3-го года."""
+    nomer = attrs.get("nomer")
+    zagolovok = "Проба" + (f" П{tekst(nomer)}" if not pusto(nomer) else "")
+    return _kartochka(zagolovok, "#2e5e3e", _mesto(attrs), _stroki(attrs, POLYA_PROBY))
+
+
 def metka(attrs, photo_src=None):
     zagolovok = tekst(attrs.get("kategoriya_label")) if not pusto(attrs.get("kategoriya_label")) else "Метка"
     podval = f"<a href='{html.escape(photo_src)}'>Открыть фото</a>" if photo_src else ""
@@ -166,6 +184,7 @@ PO_VIDU = {
     "delyanki_vid": delyanka,
     "delyanki_gruppa": delyanka,
     "tracks": obmer,
+    "proby": proba,
 }
 
 

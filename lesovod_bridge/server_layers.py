@@ -24,6 +24,9 @@ QGIS и подключает слой к этому файлу. Перерисо
 - Лесные культуры — участки с легендой по виду культур (обычные, под
   пологом, плантационные, ландшафтные…).
 - Обмеры с телефона — контуры, обойдённые рабочими по GPS, с площадью.
+- Пробы — пробные площади лесных культур, поставленные с телефона:
+  тонкий пунктир без заливки, подпись «П1» только вблизи — чтобы не
+  забивать карту; в карточке «Что здесь» — этапы учёта на пробе.
 """
 
 import glob
@@ -181,6 +184,24 @@ def _oformit_obmery(layer, _base_url, _token, _legendy):
 
 
 
+def _oformit_proby(layer, _base_url, _token, _legendy):
+    # ненавязчиво: тонкий пунктир, почти без заливки; подпись — только крупно
+    fill = QgsFillSymbol.createSimple({"color": "255,255,255,20", "outline_color": "#2e5e3e",
+                                       "outline_width": "0.35", "outline_style": "dash"})
+    layer.setRenderer(QgsSingleSymbolRenderer(fill))
+    _labels(layer, '"podpis"', size=7, color="#2e5e3e")
+    settings = QgsPalLayerSettings(layer.labeling().settings())
+    settings.scaleVisibility = True
+    settings.minimumScale = 10000  # подписи видны крупнее 1:10 000
+    settings.maximumScale = 0  # без предела вблизи
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setMapTipTemplate(
+        "<b>Проба [% \"podpis\" %]</b><br>"
+        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %] · [% coalesce(\"uchastok\", '') %]<br>"
+        "[% \"forma\" %], [% \"ploshad_m2\" %] м²<br>"
+        "[% coalesce(\"etapy\", '') %]"
+    )
+
 
 # вид слоя -> (адрес на сервере, название, оформление, нужна ли легенда)
 VIDY = {
@@ -192,6 +213,7 @@ VIDY = {
                         partial(_oformit_delyanki, "gruppa"), True),
     "lesokultury": ("/api/map/qgis/lesokultury.geojson", "Лесные культуры по виду (Лесовод)", _oformit_kultury, True),
     "tracks": ("/api/map/qgis/tracks.geojson", "Обмеры с телефона (Лесовод)", _oformit_obmery, False),
+    "proby": ("/api/map/qgis/proby.geojson", "Пробы лесных культур (Лесовод)", _oformit_proby, False),
 }
 # точки — POINT, остальное — полигоны (MULTIPOLYGON, чтобы пустой слой тоже был полигональным)
 TOCHECHNYE = {"geo_notes"}
