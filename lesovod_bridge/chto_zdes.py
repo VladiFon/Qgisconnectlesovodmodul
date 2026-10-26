@@ -34,13 +34,13 @@ from . import kartochki, settings
 
 KIND_PROPERTY = "lesovod_bridge/kind"
 # порядок карточек: культуры важнее всего (из-за них и сделано)
-PORYADOK = ["lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
+PORYADOK = ["proby", "lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
 MAX_KARTOCHEK = 30
 
 PODSKAZKA = (
     "<p><b>Что здесь</b> — включите кнопку <i>«Что здесь»</i> на панели «Лесовод-мост» "
     "и щёлкните по карте: покажутся характеристики участка лесных культур, делянки, "
-    "обмера или метки в этой точке — какой бы слой ни был активным.</p>"
+    "обмера, пробы или метки в этой точке — какой бы слой ни был активным.</p>"
     "<p>Можно и найти выдел: впишите на панели <i>«35 12»</i> (квартал и выдел) и нажмите Enter.</p>"
 )
 
