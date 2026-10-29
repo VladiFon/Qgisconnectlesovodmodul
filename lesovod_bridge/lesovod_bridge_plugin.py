@@ -4,7 +4,7 @@ from qgis.core import QgsApplication, QgsProject
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessageBox, QToolButton
 
-from . import db_reader, okraska, otmetit_lk, privyazat_delyanku, publisher, server_layers, settings
+from . import db_reader, granicy, okraska, otmetit_lk, privyazat_delyanku, publisher, server_layers, settings
 from .chto_zdes import ChtoZdes
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
@@ -106,6 +106,9 @@ class LesovodBridgePlugin:
                                 "Перечитать с сервера все слои Лесовода в проекте")
         a_publish = self._action("Опубликовать в Лесовод", self.run_publish, _icon("publish.svg"),
                                  "Отправить лесосеки из базы ГИСлесхоза на сервер Лесовода")
+        a_granicy = self._action("Отправить кварталы и выделы в Лесовод…", self.run_granicy, _icon("granicy.svg"),
+                                 "Обновить границы кварталов и выделов на живой карте сайта и в телефонах "
+                                 "(после обновления карт в ГИСлесхозе)")
         a_export = self._action("Выгрузить лесосеки в shp…", self.run_export, _icon("shp.svg"),
                                 "Выгрузить выбранные лесосеки ГИСлесхоза в shp (текущие изменения)")
         a_settings = self._action("Настройки Лесовод-моста…", self.run_settings,
@@ -143,6 +146,7 @@ class LesovodBridgePlugin:
         self.toolbar.addSeparator()
 
         self.toolbar.addAction(a_publish)
+        self.toolbar.addAction(a_granicy)
         self.toolbar.addAction(a_export)
         self.toolbar.addAction(a_settings)
 
@@ -264,6 +268,61 @@ class LesovodBridgePlugin:
         if read_errors:
             message += "\n\nПропущено строк с нераспознанной геометрией:\n" + "\n".join(read_errors)
         QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", message)
+
+    def run_granicy(self):
+        """Кварталы / выделы ГИСлесхоза -> файлы границ живой карты на сервере."""
+        values = settings.load()
+        if not values["lesovod_base_url"] or not values["lesovod_token"]:
+            QMessageBox.warning(self.iface.mainWindow(), "Лесовод-мост",
+                                "Не заданы адрес сервера «Лесовод» и токен — «Настройки Лесовод-моста…».")
+            return
+        dialog = granicy.GranicyDialog(self.iface.mainWindow())
+        if dialog.exec_() != dialog.Accepted:
+            return
+        try:
+            zadaniya = [granicy.podgotovit(sloy, layer) for sloy, layer in dialog.vybrannye().items()]
+        except granicy.GranicyError as exc:
+            QMessageBox.warning(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        base_url, token = values["lesovod_base_url"], values["lesovod_token"]
+
+        def otpravleno(exception, result):
+            if exception is not None or result is None:
+                text = str(exception) if exception is not None else "отправка отменена"
+                QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", f"Границы не отправлены: {text}")
+                return
+            stroki = []
+            for paket, otvet in result:
+                ostalis = ", ".join(otvet.get("ostavleno_lesnichestv") or {}) or "нет"
+                stroki.append(f"{paket['podpis']}: принято {otvet.get('obektov')} шт. "
+                              f"(другие лесничества в файле не тронуты: {ostalis})")
+            QMessageBox.information(
+                self.iface.mainWindow(), "Лесовод-мост",
+                "Границы обновлены на сервере — сайт видит их сразу.\n" + "\n".join(stroki)
+                + "\n\nТелефоны подтянут сами в течение 12 часов; сразу — Профиль → «Обновить карту».")
+
+        def sobrano(exception, paketi):
+            if exception is not None or paketi is None:
+                text = str(exception) if exception is not None else "подготовка отменена"
+                QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", f"Не удалось подготовить границы: {text}")
+                return
+            pustye = [p["podpis"] for p in paketi if not p["obektov"]]
+            if pustye:
+                QMessageBox.warning(
+                    self.iface.mainWindow(), "Лесовод-мост",
+                    f"Не отправляю: в «{', '.join(pustye)}» не нашлось ни одного объекта с известным лесничеством.\n\n"
+                    + granicy.svodka(paketi))
+                return
+            otvet = QMessageBox.question(
+                self.iface.mainWindow(), "Лесовод-мост",
+                "Отправить в Лесовод? Границы этих лесничеств на сервере заменятся:\n\n" + granicy.svodka(paketi),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if otvet == QMessageBox.Yes:
+                granicy.otpravit_v_fone(paketi, base_url, token, otpravleno)
+                self.iface.messageBar().pushInfo("Лесовод-мост", "Отправляю границы в фоне — работать можно")
+
+        granicy.sobrat_v_fone(zadaniya, base_url, sobrano)
+        self.iface.messageBar().pushInfo("Лесовод-мост", "Готовлю кварталы и выделы в фоне — работать можно")
 
     def run_export(self):
         read = self._read_lesoseki()
