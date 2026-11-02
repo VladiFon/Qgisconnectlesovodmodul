@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <path d="M2.5 2.5 H21.5 V21.5 H2.5 Z M12 2.5 V21.5 M2.5 12 H12" fill="none" stroke="#9e9e9e" stroke-width="1.3"/>
+  <path d="M6 6 L18 4.5 L19.5 15 L8 18.5 Z" fill="#ff9800" fill-opacity="0.45" stroke="#1a4331" stroke-width="1.8"/>
+  <text x="15.5" y="22" font-family="Arial" font-weight="bold" font-size="7" fill="#1a4331">га</text>
+</svg>

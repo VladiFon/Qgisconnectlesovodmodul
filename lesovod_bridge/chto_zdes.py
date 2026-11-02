@@ -27,10 +27,10 @@ from qgis.core import (
 )
 from qgis.gui import QgsHighlight, QgsMapToolEmitPoint
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QGuiApplication
 from qgis.PyQt.QtWidgets import QDockWidget, QTextBrowser
 
-from . import kartochki, settings
+from . import kartochki, ploshad_vydela, settings
 
 KIND_PROPERTY = "lesovod_bridge/kind"
 # порядок карточек: культуры важнее всего (из-за них и сделано)
@@ -85,6 +85,17 @@ def _photo_src(attrs):
     return f"{base}{url}?token={urlparse.quote(token, safe='')}" if base else None
 
 
+def _mozhno_schitat(kind, layer, po_knopke):
+    """Площадь по выделам: под делянками Лесовода и лесосеками ГИСлесхоза — всегда,
+    по кнопке «Площадь по выделам» — и для любого другого полигона (свой нарисованный
+    контур, обмер с телефона, участок культур со своим контуром), кроме самих выделов."""
+    if not isinstance(layer, QgsVectorLayer) or layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+        return False
+    if kind in ploshad_vydela.DELYANKI_KINDS or ploshad_vydela.eto_lesoseki(layer):
+        return True
+    return po_knopke and kind in ploshad_vydela.DRUGIE_KINDS
+
+
 class ChtoZdes:
     """Панель с карточками + инструмент карты + подсветка найденного."""
 
@@ -95,7 +106,10 @@ class ChtoZdes:
         self.dock = QDockWidget("Лесовод: что здесь", iface.mainWindow())
         self.dock.setObjectName("LesovodBridgeChtoZdes")
         self.browser = QTextBrowser()
-        self.browser.setOpenExternalLinks(True)
+        # ссылки сами: «Скопировать для Excel» — не адрес, фото — в браузер
+        self.browser.setOpenLinks(False)
+        self.browser.anchorClicked.connect(self._ssylka)
+        self._dlya_excel = {}
         self.browser.setHtml(PODSKAZKA)
         self.dock.setWidget(self.browser)
         self.dock.setMinimumWidth(300)
@@ -105,6 +119,8 @@ class ChtoZdes:
 
         self.tool = QgsMapToolEmitPoint(self.canvas)
         self.tool.canvasClicked.connect(self.v_tochke)
+        self.tool_ploshad = QgsMapToolEmitPoint(self.canvas)
+        self.tool_ploshad.canvasClicked.connect(self.ploshad_v_tochke)
 
         self._podklyucheny = {}
         QgsProject.instance().layersAdded.connect(self._sloi_dobavleny)
@@ -126,8 +142,9 @@ class ChtoZdes:
                 except (TypeError, RuntimeError):
                     pass
         self._podklyucheny = {}
-        if self.canvas.mapTool() is self.tool:
-            self.canvas.unsetMapTool(self.tool)
+        for tool in (self.tool, self.tool_ploshad):
+            if self.canvas.mapTool() is tool:
+                self.canvas.unsetMapTool(tool)
         self.iface.removeDockWidget(self.dock)
         self.dock.deleteLater()
 
@@ -163,6 +180,75 @@ class ChtoZdes:
         self.canvas.setMapTool(self.tool)
         self.dock.show()
         self.dock.raise_()
+
+    def vklyuchit_ploshad(self, action):
+        """Кнопка «Площадь делянки по выделам»: выделенное на активном слое
+        считается сразу, иначе — щёлкните по делянке / лесосеке на карте."""
+        layer = self.iface.activeLayer()
+        if isinstance(layer, QgsVectorLayer) and layer.geometryType() == QgsWkbTypes.PolygonGeometry \
+                and layer.selectedFeatureCount() and _mozhno_schitat(lesovod_kind(layer), layer, True):
+            kind = lesovod_kind(layer)
+            naydeno = [(kind, layer, f) for f in islice(layer.getSelectedFeatures(), MAX_KARTOCHEK)]
+            self.pokazat(naydeno, zagolovok=f"Площадь по выделам — выделено на слое «{layer.name()}»",
+                         po_vydelam=True)
+        else:
+            self.browser.setHtml(
+                "<p><b>Площадь делянки по выделам</b> — щёлкните по делянке (слой «Делянки» Лесовода) "
+                "или по лесосеке ГИСлесхоза: покажу, сколько гектаров она занимает в каждом выделе.</p>"
+                "<p>Можно и выделить несколько лесосек на активном слое и нажать кнопку ещё раз.</p>")
+        self.tool_ploshad.setAction(action)
+        self.canvas.setMapTool(self.tool_ploshad)
+        self.dock.show()
+        self.dock.raise_()
+
+    def ploshad_v_tochke(self, point, _button=None):
+        radius = self.canvas.mapUnitsPerPixel() * 3
+        naydeno, vidennye = [], set()
+        sloi = [(k, lr) for k, lr in self._sloi() if k in ploshad_vydela.DELYANKI_KINDS]
+        sloi += [(None, lr) for lr in QgsProject.instance().mapLayers().values()
+                 if ploshad_vydela.eto_lesoseki(lr) and _vidimyy(lr)]
+        for kind, layer in sloi:
+            for f in self._v_tochke_sloya(layer, point, radius):
+                klyuch = ploshad_vydela.klyuch(kind, layer, f)
+                if klyuch not in vidennye:
+                    vidennye.add(klyuch)
+                    naydeno.append((kind, layer, f))
+        if not naydeno:
+            self.browser.setHtml("<p>В этой точке нет делянки Лесовода или лесосеки ГИСлесхоза "
+                                 "(слой с «лесосек» в названии). Включите слой «Делянки» или «Лесосеки».</p>")
+            self.dock.show()
+            return
+        self.pokazat(naydeno, zagolovok="Площадь по выделам", po_vydelam=True)
+
+    def _ssylka(self, url):
+        if url.scheme() == "lesovod":
+            stroki = self._dlya_excel.get(url.toString())
+            if stroki:
+                QGuiApplication.clipboard().setText("\n".join([kartochki.TSV_ZAGOLOVOK] + stroki))
+                self.iface.messageBar().pushSuccess(
+                    "Лесовод-мост", "Таблица площадей по выделам скопирована — вставьте в Excel (Ctrl+V)")
+            return
+        QDesktopServices.openUrl(url)
+
+    def _po_vydelam(self, kind, layer, f, sdelano, vydela):
+        """HTML-блок «по выделам» под карточкой делянки / лесосеки ('' — уже был)."""
+        if ploshad_vydela.klyuch(kind, layer, f) in sdelano:
+            return ""
+        try:
+            klyuch, nazvanie, svodka = ploshad_vydela.dlya_obekta(kind, layer, f, vydela)
+        except ploshad_vydela.PloshadError as exc:
+            sdelano.add(ploshad_vydela.klyuch(kind, layer, f))
+            return f"<p style='color:#c62828'>{kartochki.html.escape(str(exc))}</p>"
+        except Exception as exc:  # noqa: BLE001 - кривая геометрия не должна ломать карточку
+            return f"<p style='color:#c62828'>Площадь по выделам не посчиталась: {kartochki.html.escape(str(exc))}</p>"
+        sdelano.add(klyuch)
+        stroki = kartochki.po_vydelam_tsv(nazvanie, svodka)
+        href = f"lesovod:excel/{len(self._dlya_excel) + 1}"
+        self._dlya_excel[href] = stroki
+        self._dlya_excel.setdefault("lesovod:excel/vse", []).extend(stroki)
+        return ("<table width='100%' cellspacing='0' cellpadding='4' style='margin:-6px 0 10px 0'><tr>"
+                "<td width='6' bgcolor='#1a4331'></td><td>"
+                + kartochki.po_vydelam_html(svodka, vydela.name(), href) + "</td></tr></table>")
 
     def ubrat_podsvetku(self):
         for h in self.highlights:
@@ -285,8 +371,11 @@ class ChtoZdes:
 
     # -------------------------------------------------------------- показ ---
 
-    def pokazat(self, naydeno, zagolovok=None, podsvetit=True):
+    def pokazat(self, naydeno, zagolovok=None, podsvetit=True, po_vydelam=False):
+        """po_vydelam — показать площадь по выделам и под лесосеками ГИСлесхоза
+        (под делянками Лесовода она показывается всегда, если в проекте есть слой выделов)."""
         self.ubrat_podsvetku()
+        self._dlya_excel = {}
         if not naydeno:
             est_kultury = any(k == "lesokultury" for k, _lr in self._sloi())
             body = "<p>В этой точке объектов Лесовода нет.</p>"
@@ -297,12 +386,24 @@ class ChtoZdes:
             self.dock.show()
             return
         parts = [f"<p style='color:#555'>{zagolovok}</p>"] if zagolovok else []
+        try:
+            vydela = ploshad_vydela.sloy_vydelov()
+        except ploshad_vydela.PloshadError as exc:
+            vydela = None
+            if po_vydelam:
+                parts.append(f"<p style='color:#c62828'>{kartochki.html.escape(str(exc))}</p>")
+        sdelano = set()
         for kind, layer, f in naydeno:
             attrs = _attrs(f)
             if kind is None:
                 parts.append(kartochki.vydel(attrs, layer.name()))
             else:
                 parts.append(kartochki.kartochka(kind, attrs, _photo_src(attrs) if kind == "geo_notes" else None))
+            if vydela is not None and layer is not vydela and f.hasGeometry() \
+                    and _mozhno_schitat(kind, layer, po_vydelam):
+                parts.append(self._po_vydelam(kind, layer, f, sdelano, vydela))
+        if len([k for k in self._dlya_excel if k != "lesovod:excel/vse"]) > 1:
+            parts.append("<p><a href='lesovod:excel/vse'>Скопировать для Excel — все делянки</a></p>")
             if podsvetit and f.hasGeometry():
                 self._podsvetit(layer, f)
         self.browser.setHtml("".join(parts))
