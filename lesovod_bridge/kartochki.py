@@ -175,7 +175,8 @@ def vydel(attrs, sloy):
     lesn = iz_polya(attrs, LCH_FIELDS)
     if lesn:
         stroki.append(("Лесничество", ("№ " if lesn.isdigit() else "") + html.escape(lesn)))
-    return _kartochka(f"Выдел — слой «{sloy}»", "#9e9e9e", _mesto(attrs), stroki)
+    chto = "Лесосека" if "лесосек" in str(sloy).lower() else "Выдел"
+    return _kartochka(f"{chto} — слой «{sloy}»", "#9e9e9e", _mesto(attrs), stroki)
 
 
 PO_VIDU = {
@@ -210,3 +211,131 @@ def razobrat_poisk(text):
 def norm_id(value):
     text = tekst(value).strip().lower() if not pusto(value) else ""
     return text.lstrip("0") or text
+
+
+# ------------------------------------------------ площадь делянки по выделам --
+
+KASANIE_GA = 0.01  # кусок меньше 100 м² и меньше 1 % делянки — касание по границе, а не часть выдела
+KASANIE_DOLYA = 0.01
+RASHOZHDENIE_GA = 0.05  # «в Лесоводе записано» расходится с картой заметно, если больше и 0.05 га, и 5 %
+RASHOZHDENIE_DOLYA = 0.05
+
+
+def _chislo(value):
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def ga(value):
+    return f"{value:.2f}"
+
+
+def sobrat_po_vydelam(kuski, vsego_ga, zapisano=None):
+    """Сводка «делянка по выделам» из кусков пересечения.
+
+    kuski — [(лесничество, кв, выд, га куска, га всего выдела)], выдел может
+    прийти несколькими кусками (несколько объектов слоя на один выдел);
+    zapisano — {(кв, выд): га} — что записано по выделам делянки в Лесоводе.
+    Возвращает словарь для po_vydelam_html / po_vydelam_tsv."""
+    gruppy = {}
+    for lch, kv, vd, kusok, vydel_ga in kuski:
+        key = (str(lch or ""), norm_id(kv), norm_id(vd))
+        g = gruppy.setdefault(key, {"lch": key[0], "kv": tekst(kv) if not pusto(kv) else "",
+                                    "vd": tekst(vd) if not pusto(vd) else "", "ga": 0.0, "vydel_ga": 0.0})
+        g["ga"] += kusok
+        g["vydel_ga"] += vydel_ga or 0.0
+    chasti, kasaniya = [], {"n": 0, "ga": 0.0}
+    for g in gruppy.values():
+        if g["ga"] < KASANIE_GA and (not vsego_ga or g["ga"] < vsego_ga * KASANIE_DOLYA):
+            kasaniya["n"] += 1
+            kasaniya["ga"] += g["ga"]
+        else:
+            chasti.append(g)
+    zapisano = {(norm_id(kv), norm_id(vd)): v for (kv, vd), v in (zapisano or {}).items()}
+    for g in chasti:
+        g["lesovod_ga"] = zapisano.pop((norm_id(g["kv"]), norm_id(g["vd"])), None)
+    # записано в Лесоводе, а на карте делянка этот выдел не задевает
+    for (kv, vd), v in zapisano.items():
+        chasti.append({"lch": "", "kv": kv, "vd": vd, "ga": 0.0, "vydel_ga": 0.0, "lesovod_ga": v})
+    chasti.sort(key=lambda g: -g["ga"])
+    pokryto = sum(g["ga"] for g in gruppy.values())
+    return {
+        "vsego_ga": vsego_ga,
+        "chasti": chasti,
+        "kasaniya": kasaniya,
+        "vne_ga": max(0.0, vsego_ga - pokryto),
+        "pokazat_lch": len({g["lch"] for g in chasti if g["lch"]}) > 1,
+        "est_lesovod": any(g["lesovod_ga"] is not None for g in chasti),
+    }
+
+
+def _rashozhdenie(karta, lesovod):
+    raznica = karta - lesovod
+    return abs(raznica) > RASHOZHDENIE_GA and abs(raznica) > max(karta, lesovod) * RASHOZHDENIE_DOLYA
+
+
+def _imya_vydela(g, pokazat_lch):
+    imya = f"кв. {g['kv']} выд. {g['vd']}" if g["vd"] else f"кв. {g['kv']}"
+    if pokazat_lch and g["lch"]:
+        imya += f" ({'лесн. № ' if g['lch'].isdigit() else ''}{g['lch']})"
+    return imya
+
+
+def po_vydelam_html(svodka, sloy_vydelov, kopirovat_href=None):
+    """Блок «Площадь по выделам» для панели — строками, панель узкая."""
+    vsego = svodka["vsego_ga"]
+    out = [f"<span style='color:#555'>По выделам (слой «{html.escape(sloy_vydelov)}»), "
+           f"всего <b>{ga(vsego)} га</b>:</span><br>"]
+    if not svodka["chasti"]:
+        out.append("<i>Делянка не попадает ни в один выдел слоя.</i><br>")
+    for g in svodka["chasti"]:
+        imya = html.escape(_imya_vydela(g, svodka["pokazat_lch"]))
+        if not g["ga"]:
+            out.append(f"&bull; <b>{imya}</b> — <span style='color:#c62828'>в Лесоводе записано "
+                       f"{ga(g['lesovod_ga'])} га, а контур делянки этот выдел не задевает</span><br>")
+            continue
+        stroka = f"&bull; <b>{imya}</b> — <b>{ga(g['ga'])} га</b>"
+        if vsego and g["ga"]:
+            stroka += f" · {g['ga'] / vsego * 100:.0f}% делянки"
+        if g["vydel_ga"]:
+            stroka += f" · {min(100.0, g['ga'] / g['vydel_ga'] * 100):.0f}% выдела"
+        lesovod = g.get("lesovod_ga")
+        if lesovod is not None:
+            if _rashozhdenie(g["ga"], lesovod):
+                stroka += (f"<br>&nbsp;&nbsp;<span style='color:#c62828'>в Лесоводе записано {ga(lesovod)} га "
+                           f"(по карте {'+' if g['ga'] > lesovod else '−'}{ga(abs(g['ga'] - lesovod))})</span>")
+            else:
+                stroka += f"<br>&nbsp;&nbsp;<span style='color:#2e7d32'>в Лесоводе {ga(lesovod)} га — сходится</span>"
+        elif svodka["est_lesovod"]:
+            stroka += "<br>&nbsp;&nbsp;<span style='color:#c62828'>в Лесоводе этого выдела у делянки нет</span>"
+        out.append(stroka + "<br>")
+    if svodka["vne_ga"] >= KASANIE_GA:
+        out.append(f"<span style='color:#555'>вне выделов слоя (дорога, просека, нет выдела): "
+                   f"{ga(svodka['vne_ga'])} га</span><br>")
+    k = svodka["kasaniya"]
+    if k["n"]:
+        out.append(f"<span style='color:#888'>ещё {k['n']} касани{'е' if k['n'] == 1 else 'й'} соседних выделов "
+                   f"по границе (вместе {k['ga'] * 10000:.0f} м²) — неточность границ, в список не включено</span><br>")
+    if kopirovat_href:
+        out.append(f"<a href='{html.escape(kopirovat_href)}'>Скопировать для Excel</a><br>")
+    return "".join(out)
+
+
+def po_vydelam_tsv(nazvanie, svodka):
+    """Строки для вставки в Excel (табуляция): делянка, кв, выд, га, % делянки, % выдела, в Лесоводе."""
+    stroki = []
+    for g in svodka["chasti"]:
+        vsego = svodka["vsego_ga"]
+        stroki.append("\t".join([
+            nazvanie, g["lch"], g["kv"], g["vd"], ga(g["ga"]).replace(".", ","),
+            f"{g['ga'] / vsego * 100:.0f}" if vsego else "",
+            f"{min(100.0, g['ga'] / g['vydel_ga'] * 100):.0f}" if g["vydel_ga"] else "",
+            ga(g["lesovod_ga"]).replace(".", ",") if g.get("lesovod_ga") is not None else "",
+        ]))
+    return stroki
+
+
+TSV_ZAGOLOVOK = "\t".join(["Делянка", "Лесничество", "Квартал", "Выдел", "Площадь в выделе, га",
+                           "% делянки", "% выдела", "В Лесоводе, га"])

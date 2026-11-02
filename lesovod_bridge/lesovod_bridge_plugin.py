@@ -75,6 +75,11 @@ class LesovodBridgePlugin:
             "Что здесь: щёлкните по карте — покажутся характеристики участка лесных культур, делянки, "
             "обмера или метки в этой точке, какой бы слой ни был активным")
         self.chto_zdes_action.setCheckable(True)
+        self.ploshad_action = self._action(
+            "Площадь делянки по выделам", self.run_ploshad_vydela, _icon("ploshad_vydela.svg"),
+            "Сколько гектаров делянка (лесосека) занимает в каждом выделе: щёлкните по делянке Лесовода "
+            "или лесосеке ГИСлесхоза, либо выделите лесосеки и нажмите кнопку. Считается по слою «Выдела»")
+        self.ploshad_action.setCheckable(True)
 
         a_kultury = self._action("Лесные культуры по виду", self.run_add_lesokultury, _icon("kultury.svg"),
                                  "Добавить / обновить слой «Лесные культуры» с сервера Лесовода")
@@ -120,6 +125,7 @@ class LesovodBridgePlugin:
         self.toolbar.setToolTip("Лесовод-мост")
 
         self.toolbar.addAction(self.chto_zdes_action)
+        self.toolbar.addAction(self.ploshad_action)
         self.poisk = QLineEdit(self.toolbar)
         self.poisk.setPlaceholderText("кв выд: 35 12")
         self.poisk.setToolTip("Найти квартал / выдел в слоях Лесовода и ГИСлесхоза: «35 12» или «35» и Enter")
@@ -174,6 +180,12 @@ class LesovodBridgePlugin:
             self.chto_zdes.vklyuchit(self.chto_zdes_action)
         elif self.iface.mapCanvas().mapTool() is self.chto_zdes.tool:
             self.iface.mapCanvas().unsetMapTool(self.chto_zdes.tool)
+
+    def run_ploshad_vydela(self, checked=True):
+        if checked:
+            self.chto_zdes.vklyuchit_ploshad(self.ploshad_action)
+        elif self.iface.mapCanvas().mapTool() is self.chto_zdes.tool_ploshad:
+            self.iface.mapCanvas().unsetMapTool(self.chto_zdes.tool_ploshad)
 
     def run_nayti(self):
         self.chto_zdes.nayti(self.poisk.text())
