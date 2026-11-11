@@ -203,6 +203,25 @@ def _oformit_proby(layer, _base_url, _token, _legendy):
     )
 
 
+def _oformit_sklady(layer, _base_url, _token, _legendy):
+    # Склады ЕГАИС (0.11.0): точка, цвет — по состоянию (сервер отдаёт готовый
+    # цвет: зелёный — лежит лес, оранжевый — горит срок вывозки, красный —
+    # срок прошёл, коричневый — залежался, серый — пусто), подпись — остаток.
+    symbol = QgsMarkerSymbol.createSimple({"name": "square", "size": "4", "outline_color": "#000000", "outline_width": "0.3"})
+    symbol.symbolLayer(0).setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, QgsProperty.fromField("color"))
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    _labels(layer, 'CASE WHEN "vsego" > 0 THEN "ostatok" ELSE \'\' END', size=8, color="#3e2723")
+    layer.setDisplayExpression('"nazvanie"')
+    layer.setMapTipTemplate(
+        "<b>[% \"nazvanie\" %]</b><br>"
+        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %] · [% coalesce(\"vid\", '') %]<br>"
+        "На складе: <b>[% \"ostatok\" %]</b><br>"
+        "[% coalesce(\"porody\", '') %]<br>"
+        "[% CASE WHEN coalesce(\"delyanka\", '') <> '' THEN 'Делянка: ' || \"delyanka\" ELSE '' END %]<br>"
+        "[% CASE WHEN coalesce(\"pochemu\", '') <> '' THEN '⚠ ' || \"pochemu\" ELSE '' END %]"
+    )
+
+
 # вид слоя -> (адрес на сервере, название, оформление, нужна ли легенда)
 VIDY = {
     "geo_notes": ("/api/map/geo-notes.geojson", "Метки рабочих (Лесовод)", _oformit_metki, False),
@@ -214,9 +233,10 @@ VIDY = {
     "lesokultury": ("/api/map/qgis/lesokultury.geojson", "Лесные культуры по виду (Лесовод)", _oformit_kultury, True),
     "tracks": ("/api/map/qgis/tracks.geojson", "Обмеры с телефона (Лесовод)", _oformit_obmery, False),
     "proby": ("/api/map/qgis/proby.geojson", "Пробы лесных культур (Лесовод)", _oformit_proby, False),
+    "sklady_egais": ("/api/map/qgis/sklady.geojson", "Склады ЕГАИС с остатками (Лесовод)", _oformit_sklady, False),
 }
 # точки — POINT, остальное — полигоны (MULTIPOLYGON, чтобы пустой слой тоже был полигональным)
-TOCHECHNYE = {"geo_notes"}
+TOCHECHNYE = {"geo_notes", "sklady_egais"}
 
 
 # ------------------------------------------------------------- скачивание --

@@ -55,6 +55,18 @@ POLYA_PROBY = [
     ("created_at", "Дата"),
 ]
 
+POLYA_SKLADA = [
+    ("ostatok", "На складе"),
+    ("porody", "По породам, м³"),
+    ("delyanka", "Делянка"),
+    ("pochemu", "Внимание"),
+    ("srok_vyvozki", "Срок вывозки"),
+    ("dney_bez_dvizheniya", "Дней без движения"),
+    ("vid", "Вид склада"),
+    ("lesoseka", "Лесосека"),
+    ("data_otkrytiya", "Открыт"),
+]
+
 POLYA_METKI = [
     ("note_text", "Текст"),
     ("author_fio", "Автор"),
@@ -160,6 +172,12 @@ def proba(attrs):
     return _kartochka(zagolovok, "#2e5e3e", _mesto(attrs), _stroki(attrs, POLYA_PROBY))
 
 
+def sklad(attrs):
+    """Склад ЕГАИС: что на нём лежит по последней выгрузке «Наличие продукции»."""
+    return _kartochka("Склад: " + tekst(attrs.get("nazvanie")), attrs.get("color") or "#2e7d32",
+                      _mesto(attrs), _stroki(attrs, POLYA_SKLADA))
+
+
 def metka(attrs, photo_src=None):
     zagolovok = tekst(attrs.get("kategoriya_label")) if not pusto(attrs.get("kategoriya_label")) else "Метка"
     podval = f"<a href='{html.escape(photo_src)}'>Открыть фото</a>" if photo_src else ""
@@ -186,6 +204,7 @@ PO_VIDU = {
     "delyanki_gruppa": delyanka,
     "tracks": obmer,
     "proby": proba,
+    "sklady_egais": sklad,
 }
 
 

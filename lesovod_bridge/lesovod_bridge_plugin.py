@@ -98,6 +98,9 @@ class LesovodBridgePlugin:
         a_proby = self._action("Пробы лесных культур", self.run_add_proby,
                                QgsApplication.getThemeIcon("/mActionAddPolygon.svg"),
                                "Пробные площади, поставленные с телефона (тех. приёмка, инвентаризация 1-го и 3-го года)")
+        a_sklady = self._action("Склады ЕГАИС с остатками", self.run_add_sklady,
+                                QgsApplication.getThemeIcon("/mActionAddMarker.svg"),
+                                "Склады из ЕГАИС точками: сколько леса лежит, где горит срок вывозки")
         a_otmetit = self._action("Отметить выбранное как лесные культуры…", self.run_otmetit_lk, _icon("otmetit.svg"),
                                  "Выделенные полигоны активного слоя (выдел, лесосека) отметить как участок "
                                  "лесных культур в Лесоводе")
@@ -142,7 +145,7 @@ class LesovodBridgePlugin:
         self._knopka_s_menyu(a_del_status, [a_del_status, a_del_vid, a_del_gruppa],
                              "Делянки: щелчок — по статусу работ, стрелка — по виду рубки / виду пользования")
         sloi = QAction(_icon("sloi.svg"), "Слои Лесовода", self.iface.mainWindow())
-        self._knopka_s_menyu(sloi, [a_kultury, a_del_status, a_del_vid, a_del_gruppa, a_proby, a_metki, a_tracks],
+        self._knopka_s_menyu(sloi, [a_kultury, a_del_status, a_del_vid, a_del_gruppa, a_proby, a_sklady, a_metki, a_tracks],
                              "Слои Лесовода: культуры, делянки, пробы, метки рабочих, обмеры с телефона",
                              QToolButton.InstantPopup)
         self.toolbar.addAction(a_reload)
@@ -530,6 +533,9 @@ class LesovodBridgePlugin:
 
     def run_add_proby(self):
         self._add_server_layer("proby")
+
+    def run_add_sklady(self):
+        self._add_server_layer("sklady_egais")
 
     def _obnovit_sloi(self, tiho=False):
         """Перекачать слои Лесовода в фоне. tiho — без сообщения «начал»."""

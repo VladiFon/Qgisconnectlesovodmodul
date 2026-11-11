@@ -34,7 +34,7 @@ from . import kartochki, ploshad_vydela, settings
 
 KIND_PROPERTY = "lesovod_bridge/kind"
 # порядок карточек: культуры важнее всего (из-за них и сделано)
-PORYADOK = ["proby", "lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
+PORYADOK = ["sklady_egais", "proby", "lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
 MAX_KARTOCHEK = 30
 
 PODSKAZKA = (
@@ -360,6 +360,7 @@ class ChtoZdes:
             "delyanka": ("delyanka_id", ("delyanki_status", "delyanki_vid", "delyanki_gruppa")),
             "lesokultury": ("id", ("lesokultury",)),
             "proba": ("id", ("proby",)),
+            "sklad": ("id", ("sklady_egais",)),
         }.get(tip, (None, ()))
         naydeno = []
         if oid and pole:
@@ -377,7 +378,8 @@ class ChtoZdes:
         elif z.get("kvartal"):
             self.nayti(f"{z['kvartal']} {z.get('vydel') or ''}")
         else:
-            sloy = {"delyanka": "«Делянки»", "lesokultury": "«Лесные культуры»", "proba": "«Пробы»"}.get(tip, "Лесовода")
+            sloy = {"delyanka": "«Делянки»", "lesokultury": "«Лесные культуры»", "proba": "«Пробы»",
+                    "sklad": "«Склады ЕГАИС»"}.get(tip, "Лесовода")
             self.iface.messageBar().pushWarning(
                 "Лесовод-мост", f"{nazv or 'Объект'}: не найден — добавьте или обновите слой {sloy}")
             return
