@@ -156,7 +156,22 @@ def delyanka(attrs):
     color = attrs.get("color") or attrs.get("vid_rubki_color") or "#ff9800"
     nazvanie = attrs.get("nazvanie")
     zagolovok = "Делянка" + (f" «{tekst(nazvanie)}»" if not pusto(nazvanie) else "")
-    return _kartochka(zagolovok, color, _mesto(attrs), _stroki(attrs, POLYA_DELYANKI))
+    return _kartochka(zagolovok, color, _mesto(attrs), _stroki(attrs, POLYA_DELYANKI) + _stroki_lk(attrs))
+
+
+def _da(value):
+    return value in (True, 1, "1", "true", "True")
+
+
+def _stroki_lk(attrs):
+    """0.13.0: «🌲 Лесные культуры» и «скрыта с карт» — пометки с сервера."""
+    stroki = []
+    if _da(attrs.get("lesokultury")):
+        info = attrs.get("lk_info")
+        stroki.append(("🌲 Лесные культуры", html.escape(tekst(info)) if not pusto(info) else "да"))
+    if _da(attrs.get("skryta")):
+        stroki.append(("На картах", "скрыта — " + html.escape(tekst(attrs.get("skryta_prichina") or ""))))
+    return stroki
 
 
 def obmer(attrs):
@@ -194,6 +209,7 @@ def vydel(attrs, sloy):
     if lesn:
         stroki.append(("Лесничество", ("№ " if lesn.isdigit() else "") + html.escape(lesn)))
     chto = "Лесосека" if "лесосек" in str(sloy).lower() else "Выдел"
+    stroki += _stroki_lk(attrs)
     return _kartochka(f"{chto} — слой «{sloy}»", "#9e9e9e", _mesto(attrs), stroki)
 
 
