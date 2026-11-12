@@ -38,6 +38,9 @@ from urllib import request as urlrequest
 
 from qgis.core import (
     QgsApplication,
+    QgsCategorizedSymbolRenderer,
+    QgsLineSymbol,
+    QgsRendererCategory,
     QgsDataProvider,
     QgsFillSymbol,
     QgsMarkerSymbol,
@@ -203,6 +206,69 @@ def _oformit_proby(layer, _base_url, _token, _legendy):
     )
 
 
+def _oformit_sklady(layer, _base_url, _token, _legendy):
+    # Склады ЕГАИС (0.11.0): точка, цвет — по состоянию (сервер отдаёт готовый
+    # цвет: зелёный — лежит лес, оранжевый — горит срок вывозки, красный —
+    # срок прошёл, коричневый — залежался, серый — пусто), подпись — остаток.
+    symbol = QgsMarkerSymbol.createSimple({"name": "square", "size": "4", "outline_color": "#000000", "outline_width": "0.3"})
+    symbol.symbolLayer(0).setDataDefinedProperty(QgsSymbolLayer.PropertyFillColor, QgsProperty.fromField("color"))
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    _labels(layer, 'CASE WHEN "vsego" > 0 THEN "ostatok" ELSE \'\' END', size=8, color="#3e2723")
+    layer.setDisplayExpression('"nazvanie"')
+    layer.setMapTipTemplate(
+        "<b>[% \"nazvanie\" %]</b><br>"
+        "кв. [% \"kvartal\" %], выд. [% \"vydel\" %] · [% coalesce(\"vid\", '') %]<br>"
+        "На складе: <b>[% \"ostatok\" %]</b><br>"
+        "[% coalesce(\"porody\", '') %]<br>"
+        "[% CASE WHEN coalesce(\"delyanka\", '') <> '' THEN 'Делянка: ' || \"delyanka\" ELSE '' END %]<br>"
+        "[% CASE WHEN coalesce(\"pochemu\", '') <> '' THEN '⚠ ' || \"pochemu\" ELSE '' END %]"
+    )
+
+
+# Лесные дороги (0.12.0): рисуют мастера в приложении, по ним телефон строит
+# маршрут. Цвета — как на телефоне: грунтовка жёлтая, лежнёвка коричневая,
+# зимник голубой пунктиром, волок красный пунктиром.
+DOROGI_STIL = [
+    ("gruntovka", "Грунтовка", "#ffb300", "solid"),
+    ("lezhnevka", "Лежнёвка", "#8d6e63", "solid"),
+    ("zimnik", "Зимник", "#4fc3f7", "dash"),
+    ("volok", "Волок", "#e57373", "dash"),
+]
+
+
+def _oformit_dorogi(layer, _base_url, _token, _legendy):
+    kategorii = []
+    for kod, nazvanie, cvet, stil in DOROGI_STIL:
+        symbol = QgsLineSymbol.createSimple({"line_color": cvet, "line_width": "0.9", "line_style": stil,
+                                             "capstyle": "round", "joinstyle": "round"})
+        kategorii.append(QgsRendererCategory(kod, symbol, nazvanie))
+    layer.setRenderer(QgsCategorizedSymbolRenderer("tip", kategorii))
+    _labels(layer, 'coalesce("nazvanie", "tip_label")', size=8, color="#4e342e")
+    settings = QgsPalLayerSettings(layer.labeling().settings())
+    settings.placement = QgsPalLayerSettings.Line
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setDisplayExpression('coalesce("nazvanie", "tip_label")')
+    layer.setMapTipTemplate(
+        "<b>[% coalesce(\"nazvanie\", \"tip_label\") %]</b><br>"
+        "[% \"tip_label\" %] · [% round(\"dlina_m\") %] м<br>"
+        "Проедет: [% coalesce(\"proezd\", '—') %]<br>"
+        "[% coalesce(\"kommentariy\", '') %]<br>"
+        "<small>[% coalesce(\"sozdal_fio\", '') %] · [% coalesce(\"created_at\", '') %]</small>"
+    )
+
+
+def _oformit_sledy(layer, _base_url, _token, _legendy):
+    # след смены, сохранённый с телефона по кнопке: голубой пунктир
+    symbol = QgsLineSymbol.createSimple({"line_color": "#00b8d4", "line_width": "0.8", "line_style": "dot"})
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+    _labels(layer, 'coalesce("nazvanie", \'След\') || \' \' || coalesce("author_fio", \'\')', size=8, color="#006064")
+    layer.setMapTipTemplate(
+        "<b>[% coalesce(\"nazvanie\", 'След') %]</b><br>"
+        "[% coalesce(\"author_fio\", '') %] · [% coalesce(\"created_at\", '') %]<br>"
+        "[% round(coalesce(\"perimetr_m\", 0)) %] м"
+    )
+
+
 # вид слоя -> (адрес на сервере, название, оформление, нужна ли легенда)
 VIDY = {
     "geo_notes": ("/api/map/geo-notes.geojson", "Метки рабочих (Лесовод)", _oformit_metki, False),
@@ -214,9 +280,36 @@ VIDY = {
     "lesokultury": ("/api/map/qgis/lesokultury.geojson", "Лесные культуры по виду (Лесовод)", _oformit_kultury, True),
     "tracks": ("/api/map/qgis/tracks.geojson", "Обмеры с телефона (Лесовод)", _oformit_obmery, False),
     "proby": ("/api/map/qgis/proby.geojson", "Пробы лесных культур (Лесовод)", _oformit_proby, False),
+    "sklady_egais": ("/api/map/qgis/sklady.geojson", "Склады ЕГАИС с остатками (Лесовод)", _oformit_sklady, False),
+    "dorogi": ("/api/map/qgis/dorogi.geojson", "Лесные дороги (Лесовод)", _oformit_dorogi, False),
+    # след смены приходит тем же файлом, что обмеры, только линией
+    "sledy": ("/api/map/qgis/tracks.geojson", "След с телефона (Лесовод)", _oformit_sledy, False),
 }
-# точки — POINT, остальное — полигоны (MULTIPOLYGON, чтобы пустой слой тоже был полигональным)
-TOCHECHNYE = {"geo_notes"}
+# точки — POINT, линии — MULTILINESTRING, остальное — полигоны (MULTIPOLYGON,
+# чтобы пустой слой тоже был полигональным)
+TOCHECHNYE = {"geo_notes", "sklady_egais"}
+LINEYNYE = {"dorogi", "sledy"}
+
+
+def _tip_geometrii(kind):
+    if kind in TOCHECHNYE:
+        return "POINT"
+    if kind in LINEYNYE:
+        return "MULTILINESTRING"
+    return "MULTIPOLYGON"
+
+
+def _otobrat(kind, data):
+    """В одном GeoJSON обмеров лежат и контуры (полигоны), и следы (линии):
+    каждому слою — только свои, иначе GDAL не сведёт их к одному типу."""
+    nuzhno = {"tracks": ("Polygon", "MultiPolygon"), "sledy": ("LineString", "MultiLineString")}.get(kind)
+    if nuzhno is None:
+        return data
+    import json
+
+    fc = json.loads(data.decode("utf-8") if isinstance(data, bytes) else data)
+    fc["features"] = [f for f in fc.get("features") or [] if (f.get("geometry") or {}).get("type") in nuzhno]
+    return json.dumps(fc, ensure_ascii=False).encode("utf-8")
 
 
 # ------------------------------------------------------------- скачивание --
@@ -240,7 +333,7 @@ def _v_geopackage(kind, data):
     stem = os.path.join(papka, f"{kind}_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}_{int(time.time() * 1000) % 1000:03d}")
     src, dst = stem + ".geojson", stem + ".gpkg"
     with open(src, "wb") as f:
-        f.write(data)
+        f.write(_otobrat(kind, data))
     # GDAL после первой ошибки сыплет следующими (откат, триггеры) — человеку
     # нужна первая, настоящая причина
     oshibki = []
@@ -259,7 +352,7 @@ def _v_geopackage(kind, data):
         # счётчик fid, а id остаётся обычным полем (нужен «Что здесь»).
         result = gdal.VectorTranslate(
             dst, src, options=["-unsetFid"], format="GPKG", layerName=kind,
-            geometryType="POINT" if kind in TOCHECHNYE else "MULTIPOLYGON",
+            geometryType=_tip_geometrii(kind),
         )
         if result is None:
             prichina = oshibki[0] if oshibki else gdal.GetLastErrorMsg()

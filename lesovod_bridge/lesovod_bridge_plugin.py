@@ -6,6 +6,7 @@ from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessag
 
 from . import db_reader, granicy, okraska, otmetit_lk, privyazat_delyanku, publisher, server_layers, settings
 from .chto_zdes import ChtoZdes
+from . import pokazat_s_saita
 from .export_dialog import ExportDialog
 from .settings_dialog import LesovodBridgeSettingsDialog
 
@@ -68,6 +69,8 @@ class LesovodBridgePlugin:
 
     def initGui(self):
         self.chto_zdes = ChtoZdes(self.iface)
+        # «Показать в QGIS» с сайта (0.10.0): плагин слушает сервер
+        self.slushatel = pokazat_s_saita.SlushatelSaita(self.chto_zdes)
 
         # --- действия (они же — в меню Модули -> Лесовод-мост) -------------
         self.chto_zdes_action = self._action(
@@ -95,6 +98,15 @@ class LesovodBridgePlugin:
         a_proby = self._action("Пробы лесных культур", self.run_add_proby,
                                QgsApplication.getThemeIcon("/mActionAddPolygon.svg"),
                                "Пробные площади, поставленные с телефона (тех. приёмка, инвентаризация 1-го и 3-го года)")
+        a_sklady = self._action("Склады ЕГАИС с остатками", self.run_add_sklady,
+                                QgsApplication.getThemeIcon("/mActionAddMarker.svg"),
+                                "Склады из ЕГАИС точками: сколько леса лежит, где горит срок вывозки")
+        a_dorogi = self._action("Лесные дороги", self.run_add_dorogi,
+                                QgsApplication.getThemeIcon("/mActionAddPolyline.svg"),
+                                "Дороги, нарисованные мастерами в приложении: тип, кто проедет, длина")
+        a_sledy = self._action("След с телефона", self.run_add_sledy,
+                               QgsApplication.getThemeIcon("/mActionAddPolyline.svg"),
+                               "Где прошёл рабочий за смену — только следы, которые он сам сохранил кнопкой")
         a_otmetit = self._action("Отметить выбранное как лесные культуры…", self.run_otmetit_lk, _icon("otmetit.svg"),
                                  "Выделенные полигоны активного слоя (выдел, лесосека) отметить как участок "
                                  "лесных культур в Лесоводе")
@@ -139,7 +151,7 @@ class LesovodBridgePlugin:
         self._knopka_s_menyu(a_del_status, [a_del_status, a_del_vid, a_del_gruppa],
                              "Делянки: щелчок — по статусу работ, стрелка — по виду рубки / виду пользования")
         sloi = QAction(_icon("sloi.svg"), "Слои Лесовода", self.iface.mainWindow())
-        self._knopka_s_menyu(sloi, [a_kultury, a_del_status, a_del_vid, a_del_gruppa, a_proby, a_metki, a_tracks],
+        self._knopka_s_menyu(sloi, [a_kultury, a_del_status, a_del_vid, a_del_gruppa, a_proby, a_sklady, a_dorogi, a_metki, a_tracks, a_sledy],
                              "Слои Лесовода: культуры, делянки, пробы, метки рабочих, обмеры с телефона",
                              QToolButton.InstantPopup)
         self.toolbar.addAction(a_reload)
@@ -156,10 +168,27 @@ class LesovodBridgePlugin:
         self.toolbar.addAction(a_export)
         self.toolbar.addAction(a_settings)
 
+        a_slushat = self._action("Показывать в QGIS то, что выбрали на сайте", self.run_slushat, None,
+                                 "Кнопка «🗺 Показать в QGIS» у делянки, культур и выдела на сайте приближает "
+                                 "эту карту. Снимите галочку, чтобы сайт не двигал карту")
+        a_slushat.setCheckable(True)
+        a_slushat.setChecked(pokazat_s_saita.vklyucheno())
+        self.slushatel.start()
+
         QgsProject.instance().readProject.connect(self._proekt_otkryt)
         self._proekt_otkryt()
 
+    def run_slushat(self, checked):
+        pokazat_s_saita.zapomnit(checked)
+        if checked:
+            self.slushatel.start()
+        else:
+            self.slushatel.stop()
+
     def unload(self):
+        if getattr(self, "slushatel", None):
+            self.slushatel.stop()
+            self.slushatel = None
         try:
             QgsProject.instance().readProject.disconnect(self._proekt_otkryt)
         except (TypeError, RuntimeError):
@@ -510,6 +539,15 @@ class LesovodBridgePlugin:
 
     def run_add_proby(self):
         self._add_server_layer("proby")
+
+    def run_add_sklady(self):
+        self._add_server_layer("sklady_egais")
+
+    def run_add_dorogi(self):
+        self._add_server_layer("dorogi")
+
+    def run_add_sledy(self):
+        self._add_server_layer("sledy")
 
     def _obnovit_sloi(self, tiho=False):
         """Перекачать слои Лесовода в фоне. tiho — без сообщения «начал»."""

@@ -34,7 +34,7 @@ from . import kartochki, ploshad_vydela, settings
 
 KIND_PROPERTY = "lesovod_bridge/kind"
 # порядок карточек: культуры важнее всего (из-за них и сделано)
-PORYADOK = ["proby", "lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
+PORYADOK = ["sklady_egais", "proby", "lesokultury", "delyanki_status", "delyanki_vid", "delyanki_gruppa", "tracks", "geo_notes"]
 MAX_KARTOCHEK = 30
 
 PODSKAZKA = (
@@ -350,6 +350,44 @@ class ChtoZdes:
             return
         self.pokazat(naydeno[:MAX_KARTOCHEK], zagolovok=f"Найдено: {mesto}")
         self._priblizit(naydeno)
+
+    def pokazat_s_saita(self, z):
+        """«Показать в QGIS» с сайта (0.10.0): делянка / участок культур /
+        проба — по id в слоях Лесовода, иначе (или для выдела) — по кв/выд,
+        как поиск в панели. z — словарь с сервера: tip, id, kvartal, vydel, nazvanie."""
+        tip, oid = z.get("tip"), z.get("id")
+        pole, vidy = {
+            "delyanka": ("delyanka_id", ("delyanki_status", "delyanki_vid", "delyanki_gruppa")),
+            "lesokultury": ("id", ("lesokultury",)),
+            "proba": ("id", ("proby",)),
+            "sklad": ("id", ("sklady_egais",)),
+        }.get(tip, (None, ()))
+        naydeno = []
+        if oid and pole:
+            for kind, layer in self._sloi():
+                if kind not in vidy or layer.fields().indexOf(pole) < 0:
+                    continue
+                zapros = QgsFeatureRequest().setFilterExpression(f'"{pole}" = {int(oid)}')
+                naydeno.extend((kind, layer, f) for f in layer.getFeatures(zapros))
+                if naydeno:
+                    break
+        nazv = z.get("nazvanie") or ""
+        if naydeno:
+            self.pokazat(naydeno[:MAX_KARTOCHEK], zagolovok=f"С сайта: {nazv}" if nazv else "С сайта")
+            self._priblizit(naydeno)
+        elif z.get("kvartal"):
+            self.nayti(f"{z['kvartal']} {z.get('vydel') or ''}")
+        else:
+            sloy = {"delyanka": "«Делянки»", "lesokultury": "«Лесные культуры»", "proba": "«Пробы»",
+                    "sklad": "«Склады ЕГАИС»"}.get(tip, "Лесовода")
+            self.iface.messageBar().pushWarning(
+                "Лесовод-мост", f"{nazv or 'Объект'}: не найден — добавьте или обновите слой {sloy}")
+            return
+        okno = self.iface.mainWindow()
+        if okno.isMinimized():
+            okno.showMaximized()
+        okno.raise_()
+        okno.activateWindow()
 
     def _priblizit(self, naydeno):
         dest = self.canvas.mapSettings().destinationCrs()
