@@ -154,17 +154,34 @@ DELYANKI_TITLES = {
 def _oformit_delyanki(rezhim, layer, _base_url, _token, legendy):
     """rezhim: status — по статусу работ, vid — по виду рубки (ССР, УЗ…),
     gruppa — по виду пользования (главное / промежуточное / прочие)."""
-    layer.setRenderer(okraska.renderer_delyanok(rezhim, legendy))
+    renderer = okraska.renderer_delyanok(rezhim, legendy)
+    # 0.13.0: делянка на лесных культурах — штриховка поверх цвета и «🌲 л/к»
+    # в подписи (сервер с пометками отдаёт поле lesokultury)
+    est_lk = layer.fields().indexOf("lesokultury") >= 0
+    if est_lk:
+        from .pometki import shtrikhovka
+
+        for i, cat in enumerate(renderer.categories()):
+            symbol = cat.symbol().clone()
+            hatch = shtrikhovka()
+            hatch.setDataDefinedProperty(QgsSymbolLayer.PropertyLayerEnabled,
+                                         QgsProperty.fromExpression('coalesce("lesokultury", 0) = 1'))
+            symbol.appendSymbolLayer(hatch)
+            renderer.updateCategorySymbol(i, symbol)
+    layer.setRenderer(renderer)
     podpis = {
         "status": 'coalesce("status_rabot", \'\')',
         "vid": 'coalesce("vid_rubki_kod", \'\')',
         "gruppa": 'coalesce("vid_rubki_kod", \'\')',
     }[rezhim]
-    _labels(layer, 'coalesce("nazvanie", \'\') || \'\\n\' || ' + podpis)
+    lk = " || CASE WHEN coalesce(\"lesokultury\", 0) = 1 THEN '  🌲 л/к' ELSE '' END" if est_lk else ""
+    _labels(layer, 'coalesce("nazvanie", \'\') || \'\\n\' || ' + podpis + lk)
     layer.setMapTipTemplate(
         "<b>[% coalesce(\"nazvanie\", 'Делянка') %]</b><br>"
         "кв. [% \"kvartal\" %], выд. [% \"vydel\" %]<br>Статус: [% \"status_rabot\" %]<br>"
         "Вид рубки: [% coalesce(\"vid_rubki\", '—') %]<br>[% coalesce(\"gruppa_label\", '') %]"
+        + ("<br>[% CASE WHEN coalesce(\"lesokultury\", 0) = 1 THEN '🌲 Лесные культуры: ' || coalesce(\"lk_info\", '') "
+           "ELSE '' END %]" if est_lk else "")
     )
 
 

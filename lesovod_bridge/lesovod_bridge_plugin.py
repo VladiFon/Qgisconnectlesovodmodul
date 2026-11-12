@@ -4,7 +4,7 @@ from qgis.core import QgsApplication, QgsProject
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QInputDialog, QLineEdit, QMenu, QMessageBox, QToolButton
 
-from . import db_reader, granicy, okraska, otmetit_lk, privyazat_delyanku, publisher, server_layers, settings
+from . import db_reader, granicy, okraska, otmetit_lk, pometki, privyazat_delyanku, publisher, server_layers, settings
 from .chto_zdes import ChtoZdes
 from . import pokazat_s_saita
 from .export_dialog import ExportDialog
@@ -114,6 +114,20 @@ class LesovodBridgePlugin:
                                   _icon("delyanka_kontur.svg"),
                                   "Выделенные полигоны активного слоя (лесосека, выдел) сделать контуром лесосеки "
                                   "делянки в Лесоводе — уже заведённой на этом выделе или новой")
+        a_pometit = self._action("Скрыть / пометить выделенные лесосеки…", self.run_pometit,
+                                 QgsApplication.getThemeIcon("/mActionHideSelectedLayers.svg"),
+                                 "Выделенные лесосеки (делянки Лесовода, «Лесосеки» ГИСлесхоза, культуры): скрыть с карт "
+                                 "QGIS и телефона, вернуть, отметить «лесные культуры» — чтобы не накладывались слоями")
+        a_skrytye = self._action("Что не показывать на картах…", self.run_skrytye,
+                                 QgsApplication.getThemeIcon("/mActionShowAllLayers.svg"),
+                                 "Правила (закрытые делянки, виды рубок вроде УЗ, старые лесосеки) и список скрытого "
+                                 "с кнопкой «Вернуть»")
+        self.pryatat_action = self._action("Прятать скрытые лесосеки ГИСлесхоза", self.run_pryatat,
+                                           QgsApplication.getThemeIcon("/mActionHideAllLayers.svg"),
+                                           "Включено — скрытые лесосеки не рисуются и в слое «Лесосеки» ГИСлесхоза "
+                                           "(фильтр слоя в проекте, база ГИСлесхоза не меняется). Выключите — увидите все")
+        self.pryatat_action.setCheckable(True)
+        self.pryatat_action.setChecked(pometki.pryatat())
         a_okr_vid = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду рубки", self.run_okrasit_gisleshoz_vid,
                                  _icon("okraska.svg"))
         a_okr_gruppa = self._action("Раскрасить «Лесосеки» ГИСлесхоза по виду пользования",
@@ -159,6 +173,9 @@ class LesovodBridgePlugin:
 
         self.toolbar.addAction(a_delyanka)
         self.toolbar.addAction(a_otmetit)
+        self._knopka_s_menyu(a_pometit, [a_pometit, a_skrytye, self.pryatat_action],
+                             "Скрыть выделенные лесосеки с карт / пометить «лесные культуры»; стрелка — что не "
+                             "показывать и вернуть скрытое")
         self._knopka_s_menyu(a_okr_vid, [a_okr_vid, a_okr_gruppa],
                              "Раскрасить «Лесосеки» ГИСлесхоза: по виду рубки / по виду пользования")
         self.toolbar.addSeparator()
@@ -569,9 +586,93 @@ class LesovodBridgePlugin:
 
     def run_reload(self):
         self._obnovit_sloi()
+        self._pometki_v_fone(tiho=True)
+
+    # ------------------------------------------- пометки лесосек (0.13.0) ---
+
+    def _pometki_v_fone(self, tiho=False):
+        """Скачать пометки и применить к слою «Лесосеки» ГИСлесхоза (фильтр
+        скрытых + накладка «🌲 Лесосеки на культурах»)."""
+        if not any(pometki.eto_gisleshoz(lr) for lr in okraska.gisleshoz_lesoseki_layers()):
+            return
+        values = settings.load()
+        if not values["lesovod_base_url"] or not values["lesovod_token"]:
+            return
+
+        def gotovo(dannye, legendy, oshibka):
+            if oshibka:
+                if not tiho:
+                    self.iface.messageBar().pushWarning("Лесовод-мост", f"Пометки лесосек не загружены: {oshibka}")
+                return
+            try:
+                itog = pometki.obnovit_gisleshoz(dannye, legendy, pometki.pryatat())
+            except Exception as exc:  # noqa: BLE001 — показать, а не уронить QGIS
+                self.iface.messageBar().pushWarning("Лесовод-мост", f"Не удалось применить пометки: {exc}")
+                return
+            if itog and not tiho:
+                text = "; ".join(f"«{n}»: скрыто {s}, на культурах {k}" for n, s, k in itog)
+                self.iface.messageBar().pushSuccess("Лесовод-мост", text)
+
+        pometki.zagruzit_v_fone(values["lesovod_base_url"], values["lesovod_token"], gotovo)
+
+    def run_pometit(self):
+        layer = self.iface.activeLayer()
+        try:
+            istochnik, klyuchi, opisaniya = pometki.vybrannye(layer)
+        except pometki.PometkiError as exc:
+            QMessageBox.information(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        nazvaniya = [n for n, _b in pometki.DEYSTVIYA]
+        chto, ok = QInputDialog.getItem(
+            self.iface.mainWindow(), "Лесовод-мост",
+            f"Выделено лесосек: {len(klyuchi)} (слой «{layer.name()}»).\nЧто сделать?", nazvaniya, 0, False)
+        if not ok:
+            return
+        body = {"istochnik": istochnik, "klyuchi": klyuchi, "opisaniya": opisaniya,
+                **dict(pometki.DEYSTVIYA)[chto]}
+        values = settings.load()
+        try:
+            result = pometki.otpravit(values["lesovod_base_url"], values["lesovod_token"], body)
+        except pometki.PometkiError as exc:
+            QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        layer.removeSelection()
+        self._obnovit_sloi(tiho=True)
+        self._pometki_v_fone(tiho=True)
+        self.iface.messageBar().pushSuccess(
+            "Лесовод-мост", f"{chto}: {result.get('izmeneno', len(klyuchi))} — в QGIS и в телефоне (после обновления карты)")
+
+    def run_skrytye(self):
+        values = settings.load()
+        try:
+            dannye = pometki.zagruzit(values["lesovod_base_url"], values["lesovod_token"], svezhie=True)
+        except pometki.PometkiError as exc:
+            QMessageBox.critical(self.iface.mainWindow(), "Лесовод-мост", str(exc))
+            return
+        dialog = pometki.SkrytyeDialog(dannye, values["lesovod_base_url"], values["lesovod_token"],
+                                       self.iface.mainWindow())
+        dialog.exec_()
+        if dialog.izmeneno:
+            self._obnovit_sloi(tiho=True)
+            self._pometki_v_fone()
+
+    def run_pryatat(self, checked):
+        pometki.zapomnit_pryatat(checked)
+        if checked:
+            self._pometki_v_fone()
+        else:
+            for layer in okraska.gisleshoz_lesoseki_layers():
+                if pometki.eto_gisleshoz(layer):
+                    pometki.snyat_s_gisleshoz(layer)
+            self._pometki_v_fone(tiho=True)
+            self.iface.messageBar().pushInfo("Лесовод-мост", "Лесосеки ГИСлесхоза показаны все, включая скрытые")
 
     def _proekt_otkryt(self, *_args):
         """Проект со слоями старой версии (подключены прямо к URL — из-за этого
         QGIS и вис) или с потерянной локальной копией — перевести на копию."""
         if server_layers.nuzhno_perevesti():
             self._obnovit_sloi(tiho=True)
+        # слой ГИСлесхоза мог прийти без нашего фильтра — применить пометки в фоне
+        from qgis.PyQt.QtCore import QTimer
+
+        QTimer.singleShot(1500, lambda: self._pometki_v_fone(tiho=True))

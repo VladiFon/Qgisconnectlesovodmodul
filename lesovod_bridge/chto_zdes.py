@@ -30,7 +30,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QGuiApplication
 from qgis.PyQt.QtWidgets import QDockWidget, QTextBrowser
 
-from . import kartochki, ploshad_vydela, settings
+from . import kartochki, ploshad_vydela, pometki, settings
 
 KIND_PROPERTY = "lesovod_bridge/kind"
 # порядок карточек: культуры важнее всего (из-за них и сделано)
@@ -434,6 +434,10 @@ class ChtoZdes:
         for kind, layer, f in naydeno:
             attrs = _attrs(f)
             if kind is None:
+                if pometki.eto_gisleshoz(layer):
+                    lk = pometki.lk_dlya_attrs(attrs)
+                    if lk:
+                        attrs = {**attrs, "lesokultury": True, "lk_info": lk}
                 parts.append(kartochki.vydel(attrs, layer.name()))
             else:
                 parts.append(kartochki.kartochka(kind, attrs, _photo_src(attrs) if kind == "geo_notes" else None))
