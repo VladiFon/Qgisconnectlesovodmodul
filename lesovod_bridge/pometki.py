@@ -452,7 +452,7 @@ class SkrytyeDialog(QDialog):
                              "Ничего не удаляется — скрытое возвращается здесь."))
         nast = dannye.get("nastroyki") or {}
         self.zakrytye = QCheckBox("Не показывать закрытые делянки (архив после акта)")
-        self.zakrytye.setChecked(bool(nast.get("skryt_zakrytye", True)))
+        self.zakrytye.setChecked(bool(nast.get("skryt_zakrytye", False)))
         lay.addWidget(self.zakrytye)
         row = QHBoxLayout()
         row.addWidget(QLabel("Лесосеки ГИСлесхоза старше"))
